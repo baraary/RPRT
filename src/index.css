@@ -1,0 +1,467 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Vazirmatn', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  }
+}
+
+/* Smooth hardware-accelerated transitions & menu animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes slideLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 180ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-scaleIn {
+  animation: scaleIn 200ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-slideLeft {
+  animation: slideLeft 220ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes fadeSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(22px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes paperFeed {
+  0% {
+    transform: translateY(-6px);
+    opacity: 0.35;
+  }
+  45% {
+    transform: translateY(1px);
+    opacity: 1;
+  }
+  80% {
+    transform: translateY(4px);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(6px);
+    opacity: 0.2;
+  }
+}
+
+.animate-fadeSlideUp {
+  animation: fadeSlideUp 280ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-paperFeed {
+  animation: paperFeed 1.25s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* Hide scrollbar for slim horizontal pinned bar while preserving scroll */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fadeIn,
+  .animate-scaleIn,
+  .animate-slideLeft,
+  .animate-fadeSlideUp,
+  .animate-paperFeed {
+    animation: none !important;
+  }
+}
+
+/* Custom scrollbar for dense medical editors */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+/* Sleek, formal high-contrast editorial I-Beam cursor & caret for typists */
+.high-visibility-editor,
+[contenteditable="true"],
+textarea,
+input[type="text"] {
+  caret-color: #0f766e !important;
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 4.5c1.6 0 3 .7 3 2v11c0 1.3-1.4 2-3 2M15 4.5c-1.6 0-3 .7-3 2v11c0 1.3 1.4 2 3 2M10.5 12h3' stroke='%23ffffff' stroke-width='3'/%3E%3Cpath d='M9 4.5c1.6 0 3 .7 3 2v11c0 1.3-1.4 2-3 2M15 4.5c-1.6 0-3 .7-3 2v11c0 1.3 1.4 2 3 2M10.5 12h3' stroke='%230f172a' stroke-width='1.4'/%3E%3C/g%3E%3C/svg%3E") 12 12, text !important;
+}
+
+[contenteditable="true"] {
+  outline: none;
+}
+
+/* Interactive spell-check & half-space highlight for typists */
+mark.spell-issue-highlight {
+  background-color: #fef08a;
+  color: #991b1b;
+  border-bottom: 2px wavy #ef4444;
+  padding: 1px 4px;
+  border-radius: 4px;
+  cursor: pointer !important;
+  font-weight: 700;
+  transition: all 0.15s ease;
+}
+
+mark.spell-issue-highlight:hover,
+mark.spell-issue-highlight.active-spell-issue {
+  background-color: #fde047;
+  box-shadow: 0 0 0 2px #f59e0b;
+}
+
+/* Protected inline number & measurement slots (prevents RTL/LTR BiDi text jumping!) */
+span.rad-slot {
+  display: inline-block;
+  direction: ltr;
+  unicode-bidi: isolate;
+  background-color: #e0f2fe;
+  color: #0369a1;
+  border: 1px dashed #38bdf8;
+  padding: 0px 6px;
+  margin: 0 2px;
+  border-radius: 6px;
+  font-weight: 800;
+  font-family: 'Vazirmatn', monospace;
+  cursor: pointer !important;
+  transition: all 0.15s ease;
+  line-height: 1.5;
+}
+
+span.rad-slot:hover,
+span.rad-slot.active-rad-slot {
+  background-color: #bae6fd;
+  border-color: #0284c7;
+  box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.25);
+}
+
+/* Radiology Dark Room / Night Shift Mode (.dark-theme) - Excludes .printable-report! */
+.dark-theme {
+  background-color: #0b1120 !important;
+  color: #e2e8f0 !important;
+}
+
+.dark-theme header,
+.dark-theme footer,
+.dark-theme #app-editor-toolbar,
+.dark-theme .bg-white:not(.printable-report):not(.printable-report *),
+.dark-theme .bg-white\/95:not(.printable-report):not(.printable-report *),
+.dark-theme .bg-white\/70:not(.printable-report):not(.printable-report *) {
+  background-color: #111827 !important;
+  border-color: #1f2937 !important;
+  color: #f1f5f9 !important;
+}
+
+.dark-theme #app-patient-tabs-bar,
+.dark-theme #app-editor-quickbar,
+.dark-theme .bg-slate-100\/95:not(.printable-report *) {
+  background-color: rgba(11, 17, 32, 0.95) !important;
+  border-color: #1e293b !important;
+  color: #e2e8f0 !important;
+}
+
+.dark-theme .bg-slate-50:not(.printable-report *),
+.dark-theme .bg-slate-50\/50:not(.printable-report *),
+.dark-theme .bg-slate-50\/70:not(.printable-report *),
+.dark-theme .bg-slate-50\/80:not(.printable-report *),
+.dark-theme .bg-slate-50\/90:not(.printable-report *),
+.dark-theme .bg-slate-100:not(.printable-report *),
+.dark-theme .bg-slate-200\/80:not(.printable-report *) {
+  background-color: #1e293b !important;
+  border-color: #334155 !important;
+  color: #e2e8f0 !important;
+}
+
+/* Dark mode hover states for buttons in active modality bar, quickbar, pins, and more-info bar */
+.dark-theme button.bg-white:not(.printable-report *),
+.dark-theme div.bg-white:not(.printable-report *) {
+  background-color: #1e293b !important;
+  border-color: #334155 !important;
+  color: #e2e8f0 !important;
+}
+
+.dark-theme button.bg-white:hover:not(.printable-report *),
+.dark-theme .hover\:bg-slate-100:hover:not(.printable-report *),
+.dark-theme .hover\:bg-slate-50:hover:not(.printable-report *) {
+  background-color: #334155 !important;
+  color: #ffffff !important;
+}
+
+/* Modality-tinted pastel backgrounds (sky, indigo, emerald, teal, amber, rose) in Dark Mode */
+.dark-theme .bg-sky-50:not(.printable-report *),
+.dark-theme .bg-sky-50\/70:not(.printable-report *),
+.dark-theme .bg-sky-50\/80:not(.printable-report *),
+.dark-theme .bg-sky-50\/85:not(.printable-report *),
+.dark-theme .bg-sky-50\/90:not(.printable-report *) {
+  background-color: rgba(14, 116, 144, 0.22) !important;
+  border-color: rgba(56, 189, 248, 0.35) !important;
+  color: #bae6fd !important;
+}
+
+.dark-theme .bg-indigo-50:not(.printable-report *),
+.dark-theme .bg-indigo-50\/85:not(.printable-report *),
+.dark-theme .bg-indigo-50\/90:not(.printable-report *),
+.dark-theme .bg-indigo-100:not(.printable-report *) {
+  background-color: rgba(67, 56, 202, 0.24) !important;
+  border-color: rgba(129, 140, 248, 0.35) !important;
+  color: #c7d2fe !important;
+}
+
+.dark-theme .bg-emerald-50:not(.printable-report *),
+.dark-theme .bg-emerald-50\/85:not(.printable-report *),
+.dark-theme .bg-emerald-50\/90:not(.printable-report *),
+.dark-theme .bg-emerald-100:not(.printable-report *) {
+  background-color: rgba(4, 120, 87, 0.22) !important;
+  border-color: rgba(52, 211, 153, 0.35) !important;
+  color: #a7f3d0 !important;
+}
+
+.dark-theme .bg-teal-50:not(.printable-report *),
+.dark-theme .bg-teal-50\/60:not(.printable-report *),
+.dark-theme .bg-teal-50\/70:not(.printable-report *),
+.dark-theme .bg-teal-100:not(.printable-report *),
+.dark-theme .from-teal-50\/90:not(.printable-report *) {
+  background-color: rgba(15, 118, 110, 0.22) !important;
+  background-image: none !important;
+  border-color: rgba(45, 212, 191, 0.35) !important;
+  color: #99f6e4 !important;
+}
+
+.dark-theme .bg-amber-50:not(.printable-report *),
+.dark-theme .bg-amber-50\/70:not(.printable-report *),
+.dark-theme .bg-amber-50\/95:not(.printable-report *),
+.dark-theme .bg-amber-100\/80:not(.printable-report *) {
+  background-color: rgba(180, 83, 9, 0.22) !important;
+  border-color: rgba(251, 191, 36, 0.35) !important;
+  color: #fde68a !important;
+}
+
+.dark-theme .bg-rose-50:not(.printable-report *) {
+  background-color: rgba(190, 18, 60, 0.22) !important;
+  border-color: rgba(251, 113, 133, 0.35) !important;
+  color: #fecdd3 !important;
+}
+
+/* Text colors in Dark Mode */
+.dark-theme .text-slate-900:not(.printable-report *),
+.dark-theme .text-slate-800:not(.printable-report *),
+.dark-theme .text-slate-700:not(.printable-report *) {
+  color: #f1f5f9 !important;
+}
+
+.dark-theme .text-sky-950:not(.printable-report *),
+.dark-theme .text-sky-900:not(.printable-report *),
+.dark-theme .text-sky-800:not(.printable-report *),
+.dark-theme .text-sky-700:not(.printable-report *) {
+  color: #7dd3fc !important;
+}
+
+.dark-theme .text-indigo-950:not(.printable-report *),
+.dark-theme .text-indigo-900:not(.printable-report *),
+.dark-theme .text-indigo-800:not(.printable-report *),
+.dark-theme .text-indigo-700:not(.printable-report *) {
+  color: #a5b4fc !important;
+}
+
+.dark-theme .text-emerald-950:not(.printable-report *),
+.dark-theme .text-emerald-900:not(.printable-report *),
+.dark-theme .text-emerald-800:not(.printable-report *),
+.dark-theme .text-emerald-700:not(.printable-report *) {
+  color: #6ee7b7 !important;
+}
+
+.dark-theme .text-teal-950:not(.printable-report *),
+.dark-theme .text-teal-900:not(.printable-report *),
+.dark-theme .text-teal-800:not(.printable-report *),
+.dark-theme .text-teal-700:not(.printable-report *) {
+  color: #5eead4 !important;
+}
+
+.dark-theme .text-amber-950:not(.printable-report *),
+.dark-theme .text-amber-900:not(.printable-report *),
+.dark-theme .text-amber-800:not(.printable-report *),
+.dark-theme .text-amber-700:not(.printable-report *) {
+  color: #fcd34d !important;
+}
+
+.dark-theme .text-slate-600:not(.printable-report *),
+.dark-theme .text-slate-500:not(.printable-report *),
+.dark-theme .text-slate-400:not(.printable-report *) {
+  color: #94a3b8 !important;
+}
+
+.dark-theme .border-slate-200:not(.printable-report *),
+.dark-theme .border-slate-200\/80:not(.printable-report *),
+.dark-theme .border-slate-200\/90:not(.printable-report *),
+.dark-theme .border-slate-300:not(.printable-report *),
+.dark-theme .border-slate-100:not(.printable-report *),
+.dark-theme .divide-slate-100:not(.printable-report *) > :not([hidden]) ~ :not([hidden]) {
+  border-color: #334155 !important;
+}
+
+.dark-theme input[type="text"]:not(.printable-report *),
+.dark-theme textarea:not(.printable-report *),
+.dark-theme select:not(.printable-report *) {
+  background-color: #0f172a !important;
+  color: #f8fafc !important;
+  border-color: #334155 !important;
+}
+
+.dark-theme [contenteditable="true"]:not(.printable-report *) {
+  background-color: #0f172a !important;
+  color: #f8fafc !important;
+  caret-color: #2dd4bf !important;
+  border-radius: 12px;
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 4.5c1.6 0 3 .7 3 2v11c0 1.3-1.4 2-3 2M15 4.5c-1.6 0-3 .7-3 2v11c0 1.3 1.4 2 3 2M10.5 12h3' stroke='%230f172a' stroke-width='3'/%3E%3Cpath d='M9 4.5c1.6 0 3 .7 3 2v11c0 1.3-1.4 2-3 2M15 4.5c-1.6 0-3 .7-3 2v11c0 1.3 1.4 2 3 2M10.5 12h3' stroke='%232dd4bf' stroke-width='1.5'/%3E%3C/g%3E%3C/svg%3E") 12 12, text !important;
+}
+
+.dark-theme [contenteditable="true"]:not(.printable-report *) strong:not([style*="color"]) {
+  color: #5eead4;
+}
+
+/* Ensure highlighted spans inside dark mode editor remain readable with dark ink */
+.dark-theme [contenteditable="true"]:not(.printable-report *) [style*="background-color"]:not([style*="transparent"]):not([style*="rgba(0, 0, 0, 0)"]) {
+  color: #0f172a !important;
+  padding: 0 2px;
+  border-radius: 3px;
+}
+
+.dark-theme .printable-report {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+}
+
+/* Printable report styles */
+@media print {
+  mark.spell-issue-highlight,
+  span.rad-slot {
+    background-color: transparent !important;
+    color: inherit !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    font-weight: inherit !important;
+    display: inline !important;
+  }
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  .no-print,
+  nav,
+  footer {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+  .print-modal-backdrop {
+    position: static !important;
+    background: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    display: block !important;
+    width: 100% !important;
+    height: auto !important;
+    backdrop-filter: none !important;
+  }
+  .print-modal-container {
+    border: none !important;
+    box-shadow: none !important;
+    max-height: none !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    overflow: visible !important;
+    background: transparent !important;
+    border-radius: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  .printable-report {
+    box-shadow: none !important;
+    border: none !important;
+    padding: 12mm 16mm 14mm 16mm !important;
+    margin: 0 auto !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-height: auto !important;
+    box-sizing: border-box !important;
+    border-radius: 0 !important;
+  }
+  .study-box {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    overflow-wrap: break-word !important;
+    word-break: break-word !important;
+  }
+  .study-break-before {
+    page-break-before: always !important;
+    break-before: page !important;
+  }
+  thead {
+    display: table-header-group !important;
+  }
+  tfoot {
+    display: table-footer-group !important;
+  }
+  tbody {
+    display: table-row-group !important;
+  }
+  tr {
+    page-break-inside: auto !important;
+  }
+  .printable-table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+  }
+  @page {
+    size: A4 portrait;
+    margin: 0 !important; /* Eliminates browser-injected title, date, URL and page count */
+  }
+}
