@@ -1,5 +1,6 @@
 import { Modality, PatientInfo } from '../types';
 import { getOfflineSmartSuggestions } from '../data/medicalPhraseDictionary';
+import { StorageService } from './storage';
 
 export interface SmartSuggestionResult {
   suggestions: string[];
@@ -13,6 +14,75 @@ export interface ReviewResult {
   recommendation?: string;
 }
 
+function getPrioritizedCustomDictionarySuggestions(
+  currentText: string,
+  modality: Modality
+): string[] {
+  try {
+    const settings = StorageService.getSettings();
+    const activeDocId = settings.activeDoctorId || 'doc-1';
+    const customList = settings.customDictionary || [];
+    if (customList.length === 0) return [];
+
+    const plainText = (currentText || '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const segments = plainText.split(/[.؟!؛\n]+/);
+    const lastSentence = (segments[segments.length - 1] || plainText).trim();
+    const recentWindow = plainText.slice(-140);
+
+    const matchingModality = customList.filter(
+      (item) =>
+        (item.modality === 'all' || item.modality === modality) &&
+        item.phrase &&
+        !plainText.includes(item.phrase.trim())
+    );
+
+    const docKeywordMatches: string[] = [];
+    const generalKeywordMatches: string[] = [];
+    const docModalityFallback: string[] = [];
+    const generalModalityFallback: string[] = [];
+
+    for (const term of matchingModality) {
+      const kw = (term.keyword || '').trim();
+      const phraseWords = term.phrase.split(/\s+/).filter((w) => w.length >= 3);
+      const hasKeywordHit =
+        (kw && (lastSentence.includes(kw) || recentWindow.includes(kw))) ||
+        phraseWords.some((w) => lastSentence.includes(w));
+
+      const isActiveDoc = term.doctorId === activeDocId;
+      const isGeneralDoc = term.doctorId === 'all';
+
+      if (!isActiveDoc && !isGeneralDoc) continue;
+
+      if (hasKeywordHit) {
+        if (isActiveDoc) {
+          docKeywordMatches.push(term.phrase);
+        } else {
+          generalKeywordMatches.push(term.phrase);
+        }
+      } else {
+        if (isActiveDoc) {
+          docModalityFallback.push(term.phrase);
+        } else {
+          generalModalityFallback.push(term.phrase);
+        }
+      }
+    }
+
+    return [
+      ...docKeywordMatches,
+      ...generalKeywordMatches,
+      ...docModalityFallback,
+      ...generalModalityFallback,
+    ];
+  } catch {
+    return [];
+  }
+}
+
 // Client-side cache & rate-limit protection to respect Gemini Free Tier (5 RPM)
 const clientSuggestCache = new Map<string, string[]>();
 let clientCooldownUntil = 0;
@@ -21,15 +91,18 @@ const MIN_ONLINE_CALL_INTERVAL_MS = 15000; // Max 4 calls per minute
 
 export const AiService = {
   /**
-   * Instant 0ms offline suggestions for immediate keystroke feedback
+   * Instant 0ms offline suggestions for immediate keystroke feedback,
+   * prioritizing the active doctor's custom medical dictionary terms first!
    */
   getInstantOfflineSuggestions(currentText: string, modality: Modality): string[] {
-    return getOfflineSmartSuggestions(currentText, modality, 3);
+    const customPriority = getPrioritizedCustomDictionarySuggestions(currentText, modality);
+    const builtIn = getOfflineSmartSuggestions(currentText, modality, 3);
+    return Array.from(new Set([...customPriority, ...builtIn])).slice(0, 4);
   },
 
   /**
    * Suggest next sentences intelligently based on current context.
-   * Works offline instantly, and enhances via Gemini API when online & within rate limits.
+   * Works offline instantly (prioritizing active doctor's custom dictionary), and enhances via Gemini API when online & within rate limits.
    */
   async getNextSentenceSuggestions(
     currentText: string,
@@ -37,8 +110,10 @@ export const AiService = {
     organOrTitle = 'عمومی',
     allowOnline = true
   ): Promise<SmartSuggestionResult> {
-    // 1. Instant offline heuristic suggestions
-    const offlineSuggestions = getOfflineSmartSuggestions(currentText, modality, 3);
+    // 1. Instant offline heuristic suggestions + active doctor's custom dictionary
+    const customPriority = getPrioritizedCustomDictionarySuggestions(currentText, modality);
+    const builtIn = getOfflineSmartSuggestions(currentText, modality, 3);
+    const offlineSuggestions = Array.from(new Set([...customPriority, ...builtIn])).slice(0, 4);
     const lastSentence = (currentText.trim().split(/[.؛\n]/).pop() || '').trim();
 
     // If offline, user opted out, or text is too short to warrant an API call
@@ -57,7 +132,7 @@ export const AiService = {
     if (clientSuggestCache.has(cacheKey)) {
       const cached = clientSuggestCache.get(cacheKey)!;
       return {
-        suggestions: Array.from(new Set([...cached, ...offlineSuggestions])).slice(0, 3),
+        suggestions: Array.from(new Set([...customPriority, ...cached, ...offlineSuggestions])).slice(0, 4),
         isOnline: true,
       };
     }
@@ -99,7 +174,9 @@ export const AiService = {
           if (!data.fallback) {
             clientSuggestCache.set(cacheKey, data.suggestions);
           }
-          const combined = Array.from(new Set([...data.suggestions, ...offlineSuggestions])).slice(0, 3);
+          const combined = Array.from(
+            new Set([...customPriority, ...data.suggestions, ...offlineSuggestions])
+          ).slice(0, 4);
           return {
             suggestions: combined,
             isOnline: !data.fallback,

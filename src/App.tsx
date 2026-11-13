@@ -6,6 +6,7 @@ import {
   MedicalTemplate,
   MedicalShortcut,
   MedicalReport,
+  ReportRevision,
   PatientInfo,
   AppSettings,
   ReportStudy,
@@ -13,6 +14,7 @@ import {
   PatientWorkspaceTab,
 } from './types';
 import { StorageService } from './services/storage';
+import { IndexedDbService } from './services/indexedDbStorage';
 import { AiService } from './services/aiService';
 import { Navbar } from './components/Navbar';
 import { PatientTabsBar } from './components/PatientTabsBar';
@@ -28,13 +30,14 @@ import { PrintPreviewModal } from './components/PrintPreviewModal';
 import { ReportHistoryDrawer } from './components/ReportHistoryDrawer';
 import { SettingsModal } from './components/SettingsModal';
 import { FontManagerModal } from './components/FontManagerModal';
-import { PlusCircle, X, Check } from 'lucide-react';
+import { PlusCircle, X, Check, Printer } from 'lucide-react';
 import {
   stripSpellHighlights,
   createSlotHtml,
   autoWrapNumbersAsSlotsInHtml,
   getRadiologyTablePresetHtml,
   detectGenderAnatomyMismatch,
+  detectGenderFromPersianName,
   sanitizeHtmlForPatientGender,
   incrementAdmissionNumber,
 } from './services/typistUtils';
@@ -159,8 +162,9 @@ export default function App() {
     }, 3200);
   };
 
-  // Target Study ID for Template Drawer
+  // Target Study ID & Mode for Template Drawer
   const [targetStudyIdForTemplate, setTargetStudyIdForTemplate] = useState<string>('study-1');
+  const [templateDrawerMode, setTemplateDrawerMode] = useState<'replace' | 'add-new'>('replace');
 
   // Modals & Drawers state
   const [isTemplatesOpen, setIsTemplatesOpen] = useState(false);
@@ -180,6 +184,7 @@ export default function App() {
   const [isNewTabTemplatePickerOpen, setIsNewTabTemplatePickerOpen] = useState(false);
   const [newTabPickerModality, setNewTabPickerModality] = useState<Modality | 'all'>('all');
   const [newTabPickerSearch, setNewTabPickerSearch] = useState('');
+  const [newTabPatientName, setNewTabPatientName] = useState('');
   const [newTabPickerSortBy, setNewTabPickerSortBy] = useState<'usage' | 'alphabetical'>('usage');
   const [selectedNewTabTemplates, setSelectedNewTabTemplates] = useState<MedicalTemplate[]>([]);
 
@@ -189,10 +194,62 @@ export default function App() {
   const [newTemplateDoctorId, setNewTemplateDoctorId] = useState<string>('all');
   const [newTemplatePin, setNewTemplatePin] = useState<boolean>(true);
 
-  // Voice Dictation
+  // Voice Dictation & Zen Mode
   const [isListening, setIsListening] = useState(false);
   const [hasSpeechSupport, setHasSpeechSupport] = useState(false);
+  const [zenMode, setZenMode] = useState(false);
   const recognitionRef = useRef<any>(null);
+
+  // Apply UI font family globally to documentElement (--ui-font-family) so all modals, menus, and panels adopt it
+  useEffect(() => {
+    const chosenUiFont = settings.uiFont || "'Vazirmatn', sans-serif";
+    document.documentElement.style.setProperty('--ui-font-family', chosenUiFont);
+  }, [settings.uiFont]);
+
+  // Sync with IndexedDB multi-GB storage engine, SQLite LAN Server & Automated Local Folder Backup
+  useEffect(() => {
+    IndexedDbService.syncWithLocalStorage().then((res) => {
+      if (res.restoredFromIdb) {
+        setSavedReports(StorageService.getSavedReports());
+      }
+    });
+    if (settings.lanSyncEnabled) {
+      IndexedDbService.syncWithLanServer().then((res) => {
+        if (res.ok) {
+          setSavedReports(StorageService.getSavedReports());
+          setTemplates(StorageService.getTemplates());
+          setDoctors(StorageService.getDoctors());
+          setTypists(StorageService.getTypists());
+          setShortcuts(StorageService.getShortcuts());
+        }
+      });
+    }
+    if (settings.autoFolderBackupEnabled) {
+      IndexedDbService.writeBackupToSelectedFolder();
+    }
+  }, [savedReports.length, templates.length, settings.lanSyncEnabled, settings.autoFolderBackupEnabled]);
+
+  // Automated nightly / end-of-shift & page-close local folder backup (File System Access API)
+  useEffect(() => {
+    if (!settings.autoFolderBackupEnabled) return;
+
+    const handleVisibilityOrUnload = () => {
+      if (document.visibilityState === 'hidden') {
+        IndexedDbService.writeBackupToSelectedFolder();
+      }
+    };
+    const dailyTimer = window.setInterval(() => {
+      IndexedDbService.writeBackupToSelectedFolder();
+    }, 15 * 60 * 1000); // Check/update daily backup file every 15 minutes during shift
+
+    document.addEventListener('visibilitychange', handleVisibilityOrUnload);
+    window.addEventListener('pagehide', handleVisibilityOrUnload);
+    return () => {
+      window.clearInterval(dailyTimer);
+      document.removeEventListener('visibilitychange', handleVisibilityOrUnload);
+      window.removeEventListener('pagehide', handleVisibilityOrUnload);
+    };
+  }, [settings.autoFolderBackupEnabled]);
 
   // Active Editor Element reference & Saved Selection Range for document.execCommand
   const activeEditorRef = useRef<HTMLDivElement | null>(null);
@@ -304,7 +361,11 @@ export default function App() {
       const quickbarEl = document.getElementById('app-editor-quickbar');
 
       const navH = navEl ? Math.ceil(navEl.getBoundingClientRect().height) : 102;
-      const tabsbarH = tabsbarEl ? Math.ceil(tabsbarEl.getBoundingClientRect().height) : 44;
+      const tabsbarH = zenMode
+        ? 0
+        : tabsbarEl
+        ? Math.ceil(tabsbarEl.getBoundingClientRect().height)
+        : 44;
       const toolbarH = toolbarEl ? Math.ceil(toolbarEl.getBoundingClientRect().height) : 46;
       const quickbarH = quickbarEl ? Math.ceil(quickbarEl.getBoundingClientRect().height) : 96;
 
@@ -338,7 +399,7 @@ export default function App() {
       window.removeEventListener('resize', updateStickyOffsets);
       if (observer) observer.disconnect();
     };
-  }, [studies.length, templates.length, modality, workspaceTabs.length]);
+  }, [studies.length, templates.length, modality, workspaceTabs.length, zenMode]);
 
   // 30-Second Dirty-Check Temporary Auto-Draft System in localStorage (Crash & Sudden Browser Close Protection)
   const currentDraftPayload = JSON.stringify({
@@ -470,8 +531,38 @@ export default function App() {
   const handleAddNewPatientTab = () => {
     setNewTabPickerModality(modality);
     setNewTabPickerSearch('');
+    setNewTabPatientName('');
     setSelectedNewTabTemplates([]);
     setIsNewTabTemplatePickerOpen(true);
+  };
+
+  // Update patient name directly from a tab pill in PatientTabsBar
+  const handleUpdateTabPatientName = (tabId: string, newName: string) => {
+    const detectedGender = detectGenderFromPersianName(newName);
+    setWorkspaceTabs((prev) => {
+      const updated = prev.map((t) => {
+        if (t.id !== tabId) return t;
+        return {
+          ...t,
+          patientInfo: {
+            ...t.patientInfo,
+            fullName: newName,
+            ...(detectedGender ? { gender: detectedGender } : {}),
+          },
+          updatedAt: new Date().toISOString(),
+        };
+      });
+      StorageService.saveOpenTabs(updated);
+      return updated;
+    });
+
+    if (tabId === activeTabId) {
+      setPatientInfo((prev) => ({
+        ...prev,
+        fullName: newName,
+        ...(detectedGender ? { gender: detectedGender } : {}),
+      }));
+    }
   };
 
   // Toggle selecting/deselecting a template in the New Patient Tab multi-picker
@@ -537,14 +628,16 @@ export default function App() {
     }
 
     const firstTemplateDocId = list[0]?.doctorId;
+    const trimmedNewName = newTabPatientName.trim();
+    const detectedNewGender = detectGenderFromPersianName(trimmedNewName);
 
     const newTab: PatientWorkspaceTab = {
       id: `tab-${Date.now()}`,
       patientInfo: {
-        fullName: '',
+        fullName: trimmedNewName,
         nationalId: '',
         age: '',
-        gender: 'female',
+        gender: detectedNewGender || 'female',
         admissionNumber: nextAdm,
         reportDate: new Intl.DateTimeFormat('fa-IR-u-nu-latn').format(new Date()),
         referringPhysician: '',
@@ -569,6 +662,7 @@ export default function App() {
     setActiveDoctorId(newTab.doctorId);
     setTargetStudyIdForTemplate(initialStudies[0].id);
     setSelectedNewTabTemplates([]);
+    setNewTabPatientName('');
     setIsNewTabTemplatePickerOpen(false);
     showToast(
       list.length > 1
@@ -866,38 +960,13 @@ export default function App() {
   };
 
   const handleAddStudy = (mod: Modality = modality) => {
-    // Find matching template for this modality as initial default
-    const matchingTemplate =
-      templates.find((t) => t.modality === mod && (t.doctorId === activeDoctorId || t.doctorId === 'all')) ||
-      templates.find((t) => t.modality === mod);
-
-    const initialFindings = matchingTemplate?.findingsHtml
-      ? settings.numberSlotsEnabled
-        ? autoWrapNumbersAsSlotsInHtml(matchingTemplate.findingsHtml).updatedHtml
-        : stripSpellHighlights(matchingTemplate.findingsHtml, true)
-      : '<p>یافته‌های این تصویربرداری...</p>';
-
-    const newStudy: ReportStudy = {
-      id: `study-${Date.now()}`,
-      modality: mod,
-      titleAndTechnique: matchingTemplate
-        ? matchingTemplate.title + (matchingTemplate.technique ? ` (${matchingTemplate.technique})` : '')
-        : `تصویربرداری جدید (${mod === 'mri' ? 'ام‌آر‌آی' : mod === 'ct' ? 'سی‌تی‌اسکن' : 'سونوگرافی'})`,
-      findingsHtml: initialFindings,
-      showComparison: false,
-      comparison: matchingTemplate?.comparison || '',
-      showImpression: false,
-      impressionHtml: matchingTemplate?.impressionHtml || '<p>نتیجه‌گیری...</p>',
-      showRecommendations: false,
-      recommendationsHtml: matchingTemplate?.recommendationsHtml || '',
-    };
+    const modTitle =
+      mod === 'mri' ? 'ام‌آر‌آی' : mod === 'ct' ? 'سی‌تی‌اسکن' : 'سونوگرافی';
 
     setModality(mod);
-    setStudies((prev) => [...prev, newStudy]);
-    setTargetStudyIdForTemplate(newStudy.id);
-    // Immediately open the Template Drawer filtered to this modality so the typist can pick a template first
+    setTemplateDrawerMode('add-new');
     setIsTemplatesOpen(true);
-    showToast('تصویربرداری بعدی اضافه شد • لطفاً قالب مورد نظر را انتخاب کنید.');
+    showToast(`قالب آماده مورد نظر برای افزودن بررسی جدید (${modTitle}) را انتخاب نمایید.`);
   };
 
   const handleRemoveStudy = (studyId: string) => {
@@ -1020,6 +1089,42 @@ export default function App() {
     showToast('گزارش جدید ایجاد شد.');
   };
 
+  // Proposal #12: Match current report in archive to track lock state & version history
+  const matchedArchivedReport = savedReports.find(
+    (r) =>
+      r.patientInfo?.admissionNumber &&
+      r.patientInfo.admissionNumber === patientInfo.admissionNumber &&
+      r.patientInfo.reportDate === patientInfo.reportDate
+  );
+  const isCurrentReportLocked = Boolean(matchedArchivedReport?.isLocked);
+  const currentReportRevisions: ReportRevision[] = matchedArchivedReport?.revisions || [];
+
+  const handleUnlockReportForAddendum = () => {
+    if (!matchedArchivedReport) return;
+    StorageService.unlockReportForAddendum(matchedArchivedReport.id);
+    setSavedReports(StorageService.getSavedReports());
+    showToast(
+      '🔓 قفل گزارش باز شد • نسخه چاپ‌شده قبلی در تاریخچه نسخه‌ها محافظت شد و اکنون می‌توانید اصلاحیه (Addendum) را ثبت کنید.'
+    );
+  };
+
+  const handleRestoreReportRevision = (rev: ReportRevision, targetRep?: MedicalReport) => {
+    const baseRep = targetRep || matchedArchivedReport;
+    if (baseRep) {
+      setPatientInfo(baseRep.patientInfo);
+      setActiveDoctorId(baseRep.doctorId);
+      if (baseRep.isLocked) {
+        StorageService.unlockReportForAddendum(baseRep.id);
+        setSavedReports(StorageService.getSavedReports());
+      }
+    }
+    if (rev.studies && rev.studies.length > 0) {
+      setStudies(JSON.parse(JSON.stringify(rev.studies)));
+      setModality(rev.studies[0].modality);
+    }
+    showToast(`↺ نسخه شماره ${rev.version} (${rev.savedAtFa}) در ویرایشگر بازگردانی شد.`);
+  };
+
   // Save report to archive (attributes to active typist; updates existing report if admissionNumber matches)
   const handleSaveReportToArchive = (silent = false) => {
     const cleanedStudies = studies.map((s) => ({
@@ -1048,6 +1153,7 @@ export default function App() {
       typistName: currentTyp?.name || 'تایپیست',
       patientInfo,
       status: silent ? 'printed' : 'finalized',
+      isLocked: silent ? true : false,
     });
     setSavedReports(StorageService.getSavedReports());
     setWorkspaceTabs((prev) =>
@@ -1055,7 +1161,7 @@ export default function App() {
     );
     if (!silent) {
       showToast(
-        `✓ گزارش بیمار «${patientInfo.fullName || 'جدید'}» به نام تایپیست «${currentTyp?.name || ''}» در آرشیو و آمار ثبت شد.`
+        `✓ گزارش بیمار «${patientInfo.fullName || 'جدید'}» به نام تایپیست «${currentTyp?.name || ''}» در آرشیو و تاریخچه نسخه‌ها ثبت شد.`
       );
     }
   };
@@ -1084,7 +1190,11 @@ export default function App() {
         },
       ]);
     }
-    showToast('گزارش از آرشیو بازخوانی شد.');
+    showToast(
+      rep.isLocked
+        ? '🔒 گزارش چاپ‌شده از آرشیو بارگذاری شد (در حالت محافظت از تغییر ناخواسته).'
+        : 'گزارش از آرشیو بازخوانی شد.'
+    );
   };
 
   // Clone template
@@ -1219,6 +1329,11 @@ export default function App() {
     StorageService.addDoctor(doc);
     setDoctors(StorageService.getDoctors());
     showToast(`پزشک «${doc.name}» افزوده شد.`);
+  };
+
+  const handleUpdateDoctor = (id: string, updates: Partial<Doctor>) => {
+    const updated = StorageService.updateDoctor(id, updates);
+    setDoctors(updated);
   };
 
   const handleDeleteDoctor = (id: string) => {
@@ -1389,6 +1504,9 @@ export default function App() {
       className={`min-h-screen bg-slate-100 flex flex-col text-slate-800 font-sans transition-colors ${
         settings.darkMode ? 'dark-theme' : ''
       }`}
+      style={{
+        fontFamily: settings.uiFont || "'Vazirmatn', sans-serif",
+      }}
       dir="rtl"
     >
       {/* Toast Notification Banner (Positioned at bottom-left so it never covers top modality buttons) */}
@@ -1444,20 +1562,26 @@ export default function App() {
         onOpenSettings={() => setIsSettingsOpen(true)}
         onNewReport={() => setIsNewReportModalOpen(true)}
         onPrintPreview={() => setIsPrintOpen(true)}
+        modalityColors={settings.modalityColors}
       />
 
-      {/* Multi-Patient Open Workspace Tabs Bar (Option 5) */}
-      <PatientTabsBar
-        tabs={workspaceTabs}
-        activeTabId={activeTabId}
-        onSelectTab={handleSelectWorkspaceTab}
-        onAddNewTab={handleAddNewPatientTab}
-        onDuplicateActiveTab={handleDuplicateActiveTab}
-        onCloseTab={handleCloseWorkspaceTab}
-      />
+      {/* Multi-Patient Open Workspace Tabs Bar (Hidden in Zen Focus Mode) */}
+      {!zenMode && (
+        <PatientTabsBar
+          tabs={workspaceTabs}
+          activeTabId={activeTabId}
+          onSelectTab={handleSelectWorkspaceTab}
+          onAddNewTab={handleAddNewPatientTab}
+          onDuplicateActiveTab={handleDuplicateActiveTab}
+          onCloseTab={handleCloseWorkspaceTab}
+          onUpdateTabPatientName={handleUpdateTabPatientName}
+          onOpenReports={() => setIsReportsOpen(true)}
+          reportsCount={savedReports.length}
+        />
+      )}
 
       {/* Crash-Recovery Banner if an Unsaved Temporary Draft from Sudden Browser Closure Exists */}
-      {recoverableDraft && (
+      {recoverableDraft && !zenMode && (
         <div className="max-w-[1680px] 2xl:max-w-[1840px] w-full mx-auto px-4 sm:px-6 lg:px-8 2xl:px-10 pt-2.5 no-print">
           <div className="bg-amber-50 border border-amber-300 rounded-2xl px-4 py-2.5 flex items-center justify-between flex-wrap gap-2 shadow-2xs">
             <div className="flex items-center gap-2 text-xs text-amber-950">
@@ -1486,15 +1610,17 @@ export default function App() {
         </div>
       )}
 
-      {/* Patient Header Box (with Gender Auto-Detection & Gender-Anatomy Mismatch Alert) */}
-      <PatientHeader
-        patientInfo={patientInfo}
-        onChange={setPatientInfo}
-        criticalAlert={criticalAlert}
-        onClearCriticalAlert={() => setCriticalAlert(undefined)}
-        genderMismatch={genderMismatch}
-        onSanitizeGenderMismatch={handleSanitizeGenderMismatch}
-      />
+      {/* Patient Header Box (Hidden in Zen Focus Mode) */}
+      {!zenMode && (
+        <PatientHeader
+          patientInfo={patientInfo}
+          onChange={setPatientInfo}
+          criticalAlert={criticalAlert}
+          onClearCriticalAlert={() => setCriticalAlert(undefined)}
+          genderMismatch={genderMismatch}
+          onSanitizeGenderMismatch={handleSanitizeGenderMismatch}
+        />
+      )}
 
       {/* Full Word/Google Docs Medical Toolbar */}
       <EditorToolbar
@@ -1521,9 +1647,16 @@ export default function App() {
         onOpenFontManager={() => setIsFontManagerOpen(true)}
         editorZoom={editorZoom}
         onChangeZoom={setEditorZoom}
+        lineHeight={settings.editorLineHeight || 1.8}
+        onChangeLineHeight={(lh) => {
+          const updated = { ...settings, editorLineHeight: lh, printLineHeight: lh };
+          setSettings(updated);
+          StorageService.saveSettings(updated);
+          showToast(`↕️ فاصله خطوط گزارش (ویرایشگر و چاپ) به ${lh} تنظیم شد.`);
+        }}
       />
 
-      {/* Main Medical Document Canvas (with Multi-Study Support and Direct Action Bar) */}
+      {/* Main Medical Document Canvas (with Multi-Study Support, Zen Focus Mode, and Split-Screen Prior Report Comparison) */}
       <main className="flex-1 pb-16">
         <RichMedicalEditor
           studies={studies}
@@ -1539,6 +1672,7 @@ export default function App() {
           isOnline={isOnline}
           onOpenTemplates={(targetId) => {
             setTargetStudyIdForTemplate(targetId);
+            setTemplateDrawerMode('replace');
             setIsTemplatesOpen(true);
           }}
           onOpenShortcuts={() => setIsShortcutsOpen(true)}
@@ -1546,17 +1680,47 @@ export default function App() {
           headingFontSize={settings.headingFontSize}
           defaultFont={settings.defaultFont || 'Vazirmatn'}
           defaultFontSize={settings.defaultFontSize || 14}
+          onChangeDefaultFontSize={(newSize) => {
+            const updated = { ...settings, defaultFontSize: newSize };
+            setSettings(updated);
+            StorageService.saveSettings(updated);
+            showToast(
+              newSize < 14
+                ? `📄 سایز قلم چاپ به ${newSize} تنظیم شد تا گزارش به صورت استاندارد در ۱ صفحه A4 جا شود.`
+                : '📄 سایز قلم چاپ به حالت استاندارد (۱۴) بازگردانده شد.'
+            );
+          }}
           onShowToast={showToast}
           editorZoom={editorZoom}
           templates={templates}
           onApplyPinnedTemplate={handleApplyPinnedTemplate}
           onTogglePinTemplate={handleTogglePinTemplate}
           onStartQuickSaveAsTemplate={handleStartCreateTemplate}
+          zenMode={zenMode}
+          onToggleZenMode={() => {
+            setZenMode((prev) => {
+              const next = !prev;
+              showToast(
+                next
+                  ? '🧘 حالت تمرکز کامل تایپ (Zen Mode) فعال شد • برای خروج مجدداً Alt+F بزنید.'
+                  : 'حالت تمرکز کامل تایپ غیرفعال شد.'
+              );
+              return next;
+            });
+          }}
+          savedReports={savedReports}
+          onExecCommand={handleExecCommand}
+          isReportLocked={isCurrentReportLocked}
+          onUnlockReportForAddendum={handleUnlockReportForAddendum}
+          reportRevisions={currentReportRevisions}
+          onRestoreReportRevision={(rev) => handleRestoreReportRevision(rev)}
+          editorLineHeight={settings.editorLineHeight || 1.8}
+          printLineHeight={settings.editorLineHeight || 1.8}
         />
       </main>
 
       {/* Floating Bottom Quick Action Strip */}
-      <footer className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-slate-200/90 py-2.5 z-20 shadow-md no-print">
+      <footer className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-slate-200/90 py-2 z-20 shadow-md no-print">
         <div className="w-full max-w-[1680px] 2xl:max-w-[1840px] mx-auto px-4 sm:px-6 lg:px-8 2xl:px-10 flex items-center justify-between flex-wrap gap-2 text-xs">
           <div className="flex items-center gap-3 text-slate-500 flex-wrap">
             <span className="flex items-center gap-1.5 font-bold text-slate-700">
@@ -1571,33 +1735,35 @@ export default function App() {
                 ? 'تغییرات جدید شناسایی شد (ذخیره پیش‌نویس خودکار هر ۳۰ ثانیه)'
                 : `پیش‌نویس خودکار ذخیره شد (${lastAutoDraftTime})`}
             </span>
-            <span className="hidden sm:inline">•</span>
-            <span className="hidden sm:inline">
-              پزشک تاییدکننده: <strong>{currentDoctor.name}</strong> ({currentDoctor.medicalCouncilId})
-            </span>
-            <span className="hidden md:inline">•</span>
-            <button
-              type="button"
-              onClick={() => setIsTypistAnalyticsOpen(true)}
-              className="hidden md:inline hover:text-sky-700 transition-colors cursor-pointer"
-              title="مشاهده آمار کارکرد داخلی تایپیست‌ها"
-            >
-              تایپیست فعال: <strong className="text-sky-900">{currentTypist?.name}</strong>
-            </button>
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
             <button
+              type="button"
+              onClick={() => setIsReportsOpen(true)}
+              className="px-3 py-1.5 bg-slate-100 hover:bg-teal-50 text-slate-700 hover:text-teal-800 border border-slate-200 hover:border-teal-300 font-bold rounded-xl transition-colors cursor-pointer flex items-center gap-1.5"
+              title="مشاهده و جستجوی آرشیو گزارش‌های ذخیره‌شده بیماران"
+            >
+              <span>آرشیو بیماران</span>
+              <span className="px-1.5 py-0.2 rounded-md bg-slate-200/80 text-slate-700 text-[10px] font-mono">
+                {savedReports.length}
+              </span>
+            </button>
+            <button
+              type="button"
               onClick={() => handleSaveReportToArchive(false)}
               className="px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl shadow-xs transition-colors cursor-pointer"
             >
               ذخیره در آرشیو بیماران
             </button>
             <button
+              type="button"
               onClick={() => setIsPrintOpen(true)}
-              className="px-4 py-1.5 bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-xl shadow-xs transition-colors cursor-pointer"
+              className="px-4 py-1.5 bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-xl shadow-xs transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+              title="مشاهده پیش‌نمایش سربرگ A4، تنظیمات چاپ و صدور گزارش نهایی"
             >
-              چاپ سربرگ و صدور گزارش
+              <Printer className="w-3.5 h-3.5 shrink-0" />
+              <span>پیش‌نمایش چاپ سربرگ و صدور گزارش</span>
             </button>
           </div>
         </div>
@@ -1701,11 +1867,28 @@ export default function App() {
                 })}
               </div>
 
-              {/* Search Input + Sort Toggle (Usage Frequency vs Alphabetical) */}
+              {/* Quick Patient Name Input for the New Tab */}
               <div className="flex items-center gap-2">
                 <input
                   type="text"
                   autoFocus
+                  value={newTabPatientName}
+                  onChange={(e) => setNewTabPatientName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      finalizeCreateNewPatientTab(selectedNewTabTemplates);
+                    }
+                  }}
+                  placeholder="نام بیمار برای نمایش روی تب (مثلاً: علی رضایی) — اختیاری..."
+                  className="w-full text-xs font-bold px-3 py-2 rounded-xl border border-teal-300 bg-white focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15 focus:outline-none text-slate-900"
+                />
+              </div>
+
+              {/* Search Input + Sort Toggle (Usage Frequency vs Alphabetical) */}
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
                   value={newTabPickerSearch}
                   onChange={(e) => setNewTabPickerSearch(e.target.value)}
                   onKeyDown={(e) => {
@@ -1996,11 +2179,15 @@ export default function App() {
       {/* Modals & Drawers */}
       <TemplateDrawer
         isOpen={isTemplatesOpen}
-        onClose={() => setIsTemplatesOpen(false)}
+        onClose={() => {
+          setIsTemplatesOpen(false);
+          setTemplateDrawerMode('replace');
+        }}
         modality={modality}
         templates={templates}
         doctors={doctors}
         activeDoctorId={activeDoctorId}
+        drawerMode={templateDrawerMode}
         onSelectTemplate={applyTemplateToTargetStudy}
         onAddAsNewStudy={handleAddTemplateAsNewStudy}
         onCloneTemplate={(tpl) => setCloneTargetTemplate(tpl)}
@@ -2026,6 +2213,7 @@ export default function App() {
         isOpen={isShortcutsOpen}
         onClose={() => setIsShortcutsOpen(false)}
         shortcuts={shortcuts}
+        templates={templates}
         onAddShortcut={handleAddShortcut}
         onDeleteShortcut={handleDeleteShortcut}
       />
@@ -2040,7 +2228,14 @@ export default function App() {
           StorageService.saveSettings({ activeDoctorId: id });
         }}
         onAddDoctor={handleAddDoctor}
+        onUpdateDoctor={handleUpdateDoctor}
         onDeleteDoctor={handleDeleteDoctor}
+        defaultSignatureUrl={settings.doctorSignatureUrl}
+        onUpdateDefaultSignatureUrl={(url) => {
+          const updated = { ...settings, doctorSignatureUrl: url };
+          setSettings(updated);
+          StorageService.saveSettings(updated);
+        }}
       />
 
       <TypistAnalyticsModal
@@ -2062,6 +2257,11 @@ export default function App() {
         doctor={currentDoctor}
         settings={settings}
         onRecordPrintedReport={() => handleSaveReportToArchive(true)}
+        onUpdateSettings={(updates) => {
+          const updated = { ...settings, ...updates };
+          setSettings(updated);
+          StorageService.saveSettings(updated);
+        }}
       />
 
       <ReportHistoryDrawer
@@ -2069,8 +2269,10 @@ export default function App() {
         onClose={() => setIsReportsOpen(false)}
         reports={savedReports}
         typists={typists}
+        doctors={doctors}
         onOpenTypistAnalytics={() => setIsTypistAnalyticsOpen(true)}
         onLoadReport={handleLoadReport}
+        onRestoreRevision={(rep, rev) => handleRestoreReportRevision(rev, rep)}
         onDeleteReport={(id) => {
           const updated = StorageService.deleteReport(id);
           setSavedReports(updated);
@@ -2086,6 +2288,12 @@ export default function App() {
           StorageService.saveSettings(s);
         }}
         onRefreshAllData={handleRefreshAllData}
+        onOpenDoctors={() => {
+          setIsSettingsOpen(false);
+          setIsDoctorsOpen(true);
+        }}
+        doctors={doctors}
+        activeDoctorId={activeDoctorId}
       />
 
       <FontManagerModal

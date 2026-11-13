@@ -261,12 +261,259 @@ ${fullReport}
   }
 });
 
+// Multi-Typist Local Network (LAN) Shared SQLite Database Sync Endpoints
+import fs from 'fs';
+import os from 'os';
+import Database from 'better-sqlite3';
+
+const LAN_DATA_DIR = path.join(__dirname, 'data');
+const LAN_SQLITE_FILE = path.join(LAN_DATA_DIR, 'radioreport_lan.sqlite');
+const LAN_JSON_FALLBACK_FILE = path.join(LAN_DATA_DIR, 'lan_shared_db.json');
+
+let sqliteDb: Database.Database | null = null;
+
+function initSqliteLanDb(): Database.Database | null {
+  if (sqliteDb) return sqliteDb;
+  try {
+    if (!fs.existsSync(LAN_DATA_DIR)) {
+      fs.mkdirSync(LAN_DATA_DIR, { recursive: true });
+    }
+    const db = new Database(LAN_SQLITE_FILE);
+    db.pragma('journal_mode = WAL');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS lan_collections (
+        collection_key TEXT PRIMARY KEY,
+        payload_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS lan_reports_index (
+        id TEXT PRIMARY KEY,
+        admission_number TEXT,
+        patient_name TEXT,
+        national_id TEXT,
+        typist_id TEXT,
+        typist_name TEXT,
+        doctor_id TEXT,
+        status TEXT,
+        updated_at TEXT,
+        payload_json TEXT NOT NULL
+      );
+    `);
+    sqliteDb = db;
+    return db;
+  } catch (err) {
+    console.warn('SQLite initialization fallback to JSON:', err);
+    return null;
+  }
+}
+
+function getLocalLanIpAddresses(): string[] {
+  const ips: string[] = [];
+  try {
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+      const netList = interfaces[name];
+      if (!netList) continue;
+      for (const net of netList) {
+        if (net.family === 'IPv4' && !net.internal) {
+          ips.push(net.address);
+        }
+      }
+    }
+  } catch {}
+  return ips.length > 0 ? ips : ['192.168.1.100'];
+}
+
+function readLanDb(): any {
+  const db = initSqliteLanDb();
+  if (db) {
+    try {
+      const rows = db
+        .prepare('SELECT collection_key, payload_json FROM lan_collections')
+        .all() as Array<{ collection_key: string; payload_json: string }>;
+      const result: Record<string, any> = {
+        reports: [],
+        templates: [],
+        doctors: [],
+        typists: [],
+        shortcuts: [],
+      };
+      for (const row of rows) {
+        try {
+          result[row.collection_key] = JSON.parse(row.payload_json);
+        } catch {}
+      }
+      return result;
+    } catch {}
+  }
+
+  try {
+    if (fs.existsSync(LAN_JSON_FALLBACK_FILE)) {
+      return JSON.parse(fs.readFileSync(LAN_JSON_FALLBACK_FILE, 'utf-8'));
+    }
+  } catch {}
+  return { reports: [], templates: [], doctors: [], typists: [], shortcuts: [] };
+}
+
+function writeLanDb(data: any): void {
+  const nowIso = new Date().toISOString();
+  const db = initSqliteLanDb();
+  if (db) {
+    try {
+      const upsertCol = db.prepare(`
+        INSERT INTO lan_collections (collection_key, payload_json, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(collection_key) DO UPDATE SET
+          payload_json = excluded.payload_json,
+          updated_at = excluded.updated_at
+      `);
+
+      const upsertRep = db.prepare(`
+        INSERT INTO lan_reports_index (
+          id, admission_number, patient_name, national_id, typist_id, typist_name, doctor_id, status, updated_at, payload_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          admission_number = excluded.admission_number,
+          patient_name = excluded.patient_name,
+          national_id = excluded.national_id,
+          typist_id = excluded.typist_id,
+          typist_name = excluded.typist_name,
+          doctor_id = excluded.doctor_id,
+          status = excluded.status,
+          updated_at = excluded.updated_at,
+          payload_json = excluded.payload_json
+      `);
+
+      const tx = db.transaction(() => {
+        for (const key of ['reports', 'templates', 'doctors', 'typists', 'shortcuts']) {
+          if (Array.isArray(data[key])) {
+            upsertCol.run(key, JSON.stringify(data[key]), nowIso);
+          }
+        }
+        if (Array.isArray(data.reports)) {
+          for (const rep of data.reports) {
+            if (rep && rep.id) {
+              upsertRep.run(
+                String(rep.id),
+                String(rep.patientInfo?.admissionNumber || ''),
+                String(rep.patientInfo?.fullName || ''),
+                String(rep.patientInfo?.nationalId || ''),
+                String(rep.typistId || ''),
+                String(rep.typistName || ''),
+                String(rep.doctorId || ''),
+                String(rep.status || 'finalized'),
+                String(rep.updatedAt || rep.createdAt || nowIso),
+                JSON.stringify(rep)
+              );
+            }
+          }
+        }
+      });
+      tx();
+    } catch (err) {
+      console.warn('SQLite write warning:', err);
+    }
+  }
+
+  try {
+    if (!fs.existsSync(LAN_DATA_DIR)) {
+      fs.mkdirSync(LAN_DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(LAN_JSON_FALLBACK_FILE, JSON.stringify(data, null, 2), 'utf-8');
+  } catch {}
+}
+
+function mergeById(serverList: any[] = [], clientList: any[] = []): any[] {
+  const map = new Map<string, any>();
+  for (const item of serverList) {
+    if (item && item.id) map.set(item.id, item);
+  }
+  for (const item of clientList) {
+    if (item && item.id) {
+      const existing = map.get(item.id);
+      if (!existing) {
+        map.set(item.id, item);
+      } else {
+        const existingTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+        const clientTime = item.updatedAt ? new Date(item.updatedAt).getTime() : 0;
+        if (clientTime >= existingTime) {
+          map.set(item.id, {
+            ...existing,
+            ...item,
+            usageCount: Math.max(existing.usageCount || 0, item.usageCount || 0),
+          });
+        }
+      }
+    }
+  }
+  return Array.from(map.values());
+}
+
+app.get('/api/lan/status', (req, res) => {
+  const db = readLanDb();
+  const ips = getLocalLanIpAddresses();
+  res.json({
+    online: true,
+    engine: sqliteDb ? 'SQLite (WAL Mode)' : 'Local JSON DB',
+    dbPath: 'data/radioreport_lan.sqlite',
+    lanUrls: ips.map((ip) => `http://${ip}:${port}`),
+    counts: {
+      reports: Array.isArray(db.reports) ? db.reports.length : 0,
+      templates: Array.isArray(db.templates) ? db.templates.length : 0,
+      doctors: Array.isArray(db.doctors) ? db.doctors.length : 0,
+      typists: Array.isArray(db.typists) ? db.typists.length : 0,
+      shortcuts: Array.isArray(db.shortcuts) ? db.shortcuts.length : 0,
+    },
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get('/api/lan/sync', (req, res) => {
+  const db = readLanDb();
+  res.json({
+    ...db,
+    engine: sqliteDb ? 'SQLite' : 'JSON',
+    lanUrls: getLocalLanIpAddresses().map((ip) => `http://${ip}:${port}`),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.post('/api/lan/sync', (req, res) => {
+  try {
+    const currentDb = readLanDb();
+    const { reports, templates, doctors, typists, shortcuts } = req.body || {};
+
+    const merged = {
+      reports: mergeById(currentDb.reports, reports).sort(
+        (a, b) =>
+          new Date(b.updatedAt || b.createdAt || 0).getTime() -
+          new Date(a.updatedAt || a.createdAt || 0).getTime()
+      ),
+      templates: mergeById(currentDb.templates, templates),
+      doctors: mergeById(currentDb.doctors, doctors),
+      typists: mergeById(currentDb.typists, typists),
+      shortcuts: mergeById(currentDb.shortcuts, shortcuts),
+      updatedAt: new Date().toISOString(),
+    };
+
+    writeLanDb(merged);
+    res.json({
+      ...merged,
+      engine: sqliteDb ? 'SQLite (radioreport_lan.sqlite)' : 'JSON',
+      lanUrls: getLocalLanIpAddresses().map((ip) => `http://${ip}:${port}`),
+      timestamp: merged.updatedAt,
+    });
+  } catch (err) {
+    res.status(200).json({ ...readLanDb(), timestamp: new Date().toISOString() });
+  }
+});
+
 // Configure Vite middleware in development or serve static in production
 async function startServer() {
   if (!isProd) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true, hmr: false, watch: null },
+      server: { middlewareMode: true, hmr: false, ws: false, watch: null },
       appType: 'spa',
     });
     app.use(vite.middlewares);

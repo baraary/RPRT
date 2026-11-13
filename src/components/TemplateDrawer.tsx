@@ -20,6 +20,7 @@ interface TemplateDrawerProps {
   templates: MedicalTemplate[];
   doctors: Doctor[];
   activeDoctorId: string;
+  drawerMode?: 'replace' | 'add-new';
   onSelectTemplate: (template: MedicalTemplate, append: boolean) => void;
   onAddAsNewStudy?: (template: MedicalTemplate) => void;
   onCloneTemplate: (template: MedicalTemplate) => void;
@@ -36,6 +37,7 @@ export const TemplateDrawer: React.FC<TemplateDrawerProps> = ({
   templates,
   doctors,
   activeDoctorId,
+  drawerMode = 'replace',
   onSelectTemplate,
   onAddAsNewStudy,
   onCloneTemplate,
@@ -117,10 +119,14 @@ export const TemplateDrawer: React.FC<TemplateDrawerProps> = ({
             <Layers className="w-5 h-5 text-teal-400 shrink-0" />
             <div className="min-w-0">
               <h3 className="font-bold text-sm sm:text-base">
-                بانک قالب‌های تخصصی گزارش‌نویسی
+                {drawerMode === 'add-new'
+                  ? 'انتخاب قالب برای افزودن تصویربرداری جدید'
+                  : 'بانک قالب‌های تخصصی گزارش‌نویسی'}
               </h3>
               <p className="text-[11px] text-slate-300 mt-0.5">
-                تفکیک‌شده بر اساس مدالیته و پزشکان متخصص • با قابلیت سنجاق در نوار سریع
+                {drawerMode === 'add-new'
+                  ? 'قالب مورد نظر را انتخاب کنید تا به عنوان بررسی جدید به پرونده همین بیمار اضافه شود'
+                  : 'تفکیک‌شده بر اساس مدالیته و پزشکان متخصص • با قابلیت سنجاق در نوار سریع'}
               </p>
             </div>
           </div>
@@ -133,6 +139,15 @@ export const TemplateDrawer: React.FC<TemplateDrawerProps> = ({
             <X className="w-4 h-4" />
           </button>
         </div>
+
+        {drawerMode === 'add-new' && (
+          <div className="px-4 py-2.5 bg-indigo-50 border-b border-indigo-200 flex items-center gap-2 text-xs font-bold text-indigo-950">
+            <Plus className="w-4 h-4 text-indigo-600 shrink-0" />
+            <span>
+              حالت افزودن بررسی جدید فعال است: با کلیک روی دکمه هر قالب، آن گزارش به صورت مجزا به پایین پرونده اضافه می‌شود (بدون ایجاد گزارش خالی).
+            </span>
+          </div>
+        )}
 
         {/* Filters Bar: Modality, Doctor, Sort Order & Search */}
         <div className="p-4 bg-slate-50 border-b border-slate-200 space-y-2.5">
@@ -430,44 +445,60 @@ export const TemplateDrawer: React.FC<TemplateDrawerProps> = ({
                   {/* Action Buttons: Apply / Add as Next Study / Append / Delete */}
                   <div className="flex items-center justify-between pt-2 border-t border-slate-100 flex-wrap gap-1.5">
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onSelectTemplate(template, false);
-                          onClose();
-                        }}
-                        className={`h-8 text-xs font-bold px-3 rounded-lg shadow-2xs inline-flex items-center gap-1 transition-all duration-200 active:scale-95 cursor-pointer ${modCardTheme.applyBtn}`}
-                      >
-                        <Check className="w-3.5 h-3.5" />
-                        <span>جایگزینی در بررسی فعال</span>
-                      </button>
-
-                      {onAddAsNewStudy && (
+                      {drawerMode === 'add-new' && onAddAsNewStudy ? (
                         <button
                           type="button"
                           onClick={() => {
                             onAddAsNewStudy(template);
                             onClose();
                           }}
-                          className="text-xs font-bold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 px-2.5 py-1.5 rounded-xl transition-colors flex items-center gap-1 cursor-pointer"
-                          title="افزودن این قالب به عنوان تصویربرداری بعدی برای همین بیمار"
+                          className={`h-8 text-xs font-bold px-3.5 rounded-lg shadow-2xs inline-flex items-center gap-1.5 transition-all duration-200 active:scale-95 cursor-pointer ${modCardTheme.applyBtn}`}
                         >
                           <Plus className="w-3.5 h-3.5" />
-                          <span>+ درج به عنوان بررسی بعدی</span>
+                          <span>+ افزودن این قالب به عنوان گزارش جدید</span>
                         </button>
-                      )}
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onSelectTemplate(template, false);
+                              onClose();
+                            }}
+                            className={`h-8 text-xs font-bold px-3 rounded-lg shadow-2xs inline-flex items-center gap-1 transition-all duration-200 active:scale-95 cursor-pointer ${modCardTheme.applyBtn}`}
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            <span>جایگزینی در بررسی فعال</span>
+                          </button>
 
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onSelectTemplate(template, true);
-                          onClose();
-                        }}
-                        className="text-xs font-semibold text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 px-2.5 py-1.5 rounded-xl transition-colors cursor-pointer"
-                        title="افزودن به انتهای گزارش فعلی"
-                      >
-                        الحاق به انتها
-                      </button>
+                          {onAddAsNewStudy && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onAddAsNewStudy(template);
+                                onClose();
+                              }}
+                              className="text-xs font-bold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 px-2.5 py-1.5 rounded-xl transition-colors flex items-center gap-1 cursor-pointer"
+                              title="افزودن این قالب به عنوان تصویربرداری بعدی برای همین بیمار"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              <span>+ درج به عنوان بررسی بعدی</span>
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onSelectTemplate(template, true);
+                              onClose();
+                            }}
+                            className="text-xs font-semibold text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 px-2.5 py-1.5 rounded-xl transition-colors cursor-pointer"
+                            title="افزودن به انتهای گزارش فعلی"
+                          >
+                            الحاق به انتها
+                          </button>
+                        </>
+                      )}
                     </div>
 
                     <button

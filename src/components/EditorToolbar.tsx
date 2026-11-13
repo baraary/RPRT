@@ -22,6 +22,7 @@ import {
   ChevronDown,
   ZoomIn,
   ZoomOut,
+  MoveVertical,
 } from 'lucide-react';
 
 interface EditorToolbarProps {
@@ -44,6 +45,8 @@ interface EditorToolbarProps {
   onOpenFontManager?: () => void;
   editorZoom?: number;
   onChangeZoom?: (newZoom: number) => void;
+  lineHeight?: number;
+  onChangeLineHeight?: (lh: number) => void;
 }
 
 export const EditorToolbar: React.FC<EditorToolbarProps> = ({
@@ -66,6 +69,8 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
   onOpenFontManager,
   editorZoom = 100,
   onChangeZoom,
+  lineHeight = 1.8,
+  onChangeLineHeight,
 }) => {
   const [showFindReplace, setShowFindReplace] = useState(false);
   const [findText, setFindText] = useState('');
@@ -76,15 +81,20 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
   const [showSymbolMenu, setShowSymbolMenu] = useState(false);
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [showHighlightPicker, setShowHighlightPicker] = useState(false);
+  const [showLineHeightMenu, setShowLineHeightMenu] = useState(false);
   const [activeTextColor, setActiveTextColor] = useState<string>('#0f172a');
   const [activeHighlightColor, setActiveHighlightColor] = useState<string>('#fef08a');
   const colorMenuRef = React.useRef<HTMLDivElement | null>(null);
+  const lineHeightMenuRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {
       if (colorMenuRef.current && !colorMenuRef.current.contains(e.target as Node)) {
         setShowColorPicker(false);
         setShowHighlightPicker(false);
+      }
+      if (lineHeightMenuRef.current && !lineHeightMenuRef.current.contains(e.target as Node)) {
+        setShowLineHeightMenu(false);
       }
     };
     document.addEventListener('mousedown', handleOutsideClick);
@@ -169,8 +179,7 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
   return (
     <div
       id="app-editor-toolbar"
-      style={{ top: 'calc(var(--navbar-height, 102px) + var(--tabsbar-height, 44px))' }}
-      className="bg-white border-b border-slate-200 sticky z-30 shadow-2xs no-print"
+      className="bg-white border-b border-slate-200 shadow-2xs no-print"
     >
       <div className="w-full max-w-[1680px] 2xl:max-w-[1840px] mx-auto px-4 sm:px-6 lg:px-8 2xl:px-10 py-1.5 flex flex-wrap items-center gap-1">
         {/* Undo / Redo */}
@@ -509,6 +518,73 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
           >
             <ListOrdered className="w-3.5 h-3.5" />
           </button>
+        </div>
+
+        {/* Unified Line-Height Control (فاصله خطوط یکپارچه برای متن، نمایشگر و چاپ) */}
+        <div ref={lineHeightMenuRef} className="relative border-l border-slate-200 pl-1.5 ml-1">
+          <button
+            type="button"
+            onMouseDown={preventFocusLoss}
+            onClick={() => {
+              setShowLineHeightMenu((prev) => !prev);
+              setShowTableMenu(false);
+              setShowSymbolMenu(false);
+              setShowColorPicker(false);
+              setShowHighlightPicker(false);
+            }}
+            className="px-2 py-1 text-slate-700 hover:bg-teal-50 hover:text-teal-800 rounded-lg flex items-center gap-1 text-xs font-bold border border-transparent hover:border-teal-200 transition-colors cursor-pointer"
+            title="تنظیم فاصله خطوط گزارش (یکپارچه برای ویرایشگر، پیش‌نمایش و چاپ)"
+          >
+            <MoveVertical className="w-3.5 h-3.5 text-teal-600" />
+            <span>فاصله خطوط</span>
+            <span className="text-[10px] font-mono bg-teal-50 text-teal-800 px-1 rounded border border-teal-200">
+              {lineHeight}
+            </span>
+            <ChevronDown className="w-3 h-3 text-slate-400" />
+          </button>
+
+          {showLineHeightMenu && (
+            <div
+              onMouseDown={preventFocusLoss}
+              className="absolute right-0 mt-1.5 w-60 bg-white border border-slate-200 rounded-2xl shadow-2xl p-3 z-50 text-xs space-y-2 animate-scaleIn"
+            >
+              <div className="flex items-center justify-between border-b border-slate-100 pb-1.5">
+                <span className="font-black text-slate-800">فاصله خطوط گزارش:</span>
+                <span className="font-mono font-bold text-teal-700 bg-teal-50 px-1.5 py-0.5 rounded border border-teal-200">
+                  {lineHeight}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-1.5 pt-0.5">
+                {[
+                  { val: 1.4, label: '۱.۴ (فشرده)' },
+                  { val: 1.55, label: '۱.۵۵' },
+                  { val: 1.75, label: '۱.۷۵ (استاندارد)' },
+                  { val: 1.9, label: '۱.۹ (خوانا)' },
+                  { val: 2.1, label: '۲.۱ (باز)' },
+                  { val: 2.3, label: '۲.۳ (خیلی باز)' },
+                ].map((opt) => {
+                  const active = Math.abs((lineHeight || 1.8) - opt.val) < 0.03;
+                  return (
+                    <button
+                      key={opt.val}
+                      type="button"
+                      onClick={() => {
+                        onChangeLineHeight?.(opt.val);
+                        setShowLineHeightMenu(false);
+                      }}
+                      className={`py-1.5 px-1 rounded-lg font-bold text-[11px] border transition-all cursor-pointer ${
+                        active
+                          ? 'bg-teal-600 text-white border-teal-600 shadow-2xs'
+                          : 'bg-slate-50 hover:bg-teal-50 text-slate-700 border-slate-200'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Enhanced Insert Table Dropdown (Visual Grid + Medical Preset Tables) */}

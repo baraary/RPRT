@@ -1,10 +1,11 @@
 import { MedicalShortcut } from '../types';
 
 export const DEFAULT_SHORTCUTS: MedicalShortcut[] = [
-  // شورتکات‌های کلیدی تایپیست‌ها (با زدن کلید Space جایگزین می‌شوند)
+  // شورتکات‌های کلیدی تایپیست‌ها (با زدن کلید Space یا کلید ترکیبی کیبورد جایگزین می‌شوند)
   {
     id: 'sc-abd',
     trigger: '.abd',
+    hotkey: 'Alt+T',
     label: 'سونوگرافی کامل شکم و لگن',
     expansion:
       'سونوگرافی کامل شکم و لگن با پروب کانوکس ۳.۵ مگاهرتز با رعایت شرایط ناشتایی بیمار انجام شد. کبد، کیسه صفرا، طحال، پانکراس، هر دو کلیه و مثانه دارای ابعاد و اکوپترن طبیعی بوده و ضایعه فضاگیر یا مایع آزاد رویت نشد.',
@@ -14,14 +15,34 @@ export const DEFAULT_SHORTCUTS: MedicalShortcut[] = [
   {
     id: 'sc-nl',
     trigger: '.nl',
+    hotkey: 'Alt+M',
     label: 'بررسی نرمال فیزیولوژیک',
     expansion: 'بررسی در حد نرمال فیزیولوژیک سن بیمار می‌باشد.',
     category: 'normal',
     modality: 'all',
   },
   {
+    id: 'sc-autocorrect-abd',
+    trigger: 'abd',
+    isAutocorrect: true,
+    label: 'تصحیح خودکار: abd ⬅ abdomen',
+    expansion: 'abdomen',
+    category: 'general',
+    modality: 'all',
+  },
+  {
+    id: 'sc-autocorrect-unrem',
+    trigger: 'unrem',
+    isAutocorrect: true,
+    label: 'تصحیح خودکار: unrem ⬅ Unremarkable exam',
+    expansion: 'Unremarkable examination',
+    category: 'general',
+    modality: 'all',
+  },
+  {
     id: 'sc-gb',
     trigger: '.gb',
+    hotkey: 'Alt+G',
     label: 'کیسه صفرا نرمال',
     expansion: 'کیسه صفرا دارای جدار نازک و فاقد سنگ یا لجن صفراوی است.',
     category: 'normal',

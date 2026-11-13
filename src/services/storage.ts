@@ -1,7 +1,8 @@
-import { Doctor, MedicalTemplate, MedicalShortcut, MedicalReport, AppSettings, Modality, PatientWorkspaceTab, Typist, ReferringPhysicianItem } from '../types';
+import { Doctor, MedicalTemplate, MedicalShortcut, MedicalReport, ReportRevision, AppSettings, Modality, PatientWorkspaceTab, Typist, ReferringPhysicianItem } from '../types';
 import { DEFAULT_DOCTORS } from '../data/defaultDoctors';
 import { DEFAULT_TEMPLATES } from '../data/defaultTemplates';
 import { DEFAULT_SHORTCUTS } from '../data/defaultShortcuts';
+import { DEFAULT_CLINIC_LOGO_DATA_URI } from './typistUtils';
 
 const STORAGE_KEYS = {
   DOCTORS: 'radioreport_doctors_v1',
@@ -49,6 +50,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   smartSuggestionsEnabled: true,
   numberSlotsEnabled: false,
   darkMode: false,
+  uiFont: "'Vazirmatn', sans-serif",
   activeDoctorId: 'doc-1',
   activeTypistId: 'typ-1',
   clinicName: 'مرکز جامع تصویربرداری بیمارستان شفا',
@@ -56,23 +58,89 @@ const DEFAULT_SETTINGS: AppSettings = {
   clinicAddress: 'مازندران، ساری، کمربندی غربی، بلوار ولیعصر',
   clinicPhone: '۰۱۱-۳۳۲۰۵۰۰۶-۹',
   clinicLogoText: '',
+  clinicLogoUrl: DEFAULT_CLINIC_LOGO_DATA_URI,
   defaultFont: 'Vazirmatn',
   defaultFontSize: 14,
+  editorLineHeight: 1.9,
+  printLineHeight: 1.75,
+  modalityColors: {
+    sonography: '#0284c7',
+    mri: '#4f46e5',
+    ct: '#059669',
+  },
+  customDictionary: [
+    {
+      id: 'dict-doc1-1',
+      phrase: 'کبد با ابعاد طبیعی و اکوپترن پارانشیمال هموژن رویت شد؛ شواهدی از استئاتوز یا ضایعه فضاگیر مشهود نیست.',
+      keyword: 'کبد',
+      doctorId: 'doc-1',
+      modality: 'sonography',
+      createdAt: '2025-01-01T00:00:00.000Z',
+    },
+    {
+      id: 'dict-doc1-2',
+      phrase: 'در توالی‌های DWI و ADC Map شواهدی از محدودیت دیفیوژن حاد (Acute Restricted Diffusion) مشاهده نگردید.',
+      keyword: 'دیفیوژن',
+      doctorId: 'doc-1',
+      modality: 'mri',
+      createdAt: '2025-01-01T00:00:00.000Z',
+    },
+    {
+      id: 'dict-doc2-1',
+      phrase: 'بافت فیبروگلندولار هر دو پستان قرینه بوده و توده سالید یا کیستیک مشکوک (BI-RADS 1) رویت نشد.',
+      keyword: 'پستان',
+      doctorId: 'doc-2',
+      modality: 'sonography',
+      createdAt: '2025-01-01T00:00:00.000Z',
+    },
+    {
+      id: 'dict-doc3-1',
+      phrase: 'پارانشیم هر دو ریه شفاف بوده و کدورت گراندگلاس، ندول پولمونری یا افیوژن پلورال مشهود نمی‌باشد.',
+      keyword: 'ریه',
+      doctorId: 'doc-3',
+      modality: 'ct',
+      createdAt: '2025-01-01T00:00:00.000Z',
+    },
+    {
+      id: 'dict-all-1',
+      phrase: 'تطبیق با یافته‌های بالینی و آزمایشگاهی بیمار جهت تصمیم‌گیری درمانی توصیه می‌گردد.',
+      keyword: 'تطبیق',
+      doctorId: 'all',
+      modality: 'all',
+      createdAt: '2025-01-01T00:00:00.000Z',
+    },
+  ],
   autoSaveInterval: 5,
+  headerFont: "'Vazirmatn', sans-serif",
+  headerFontSize: 18,
   headingFont: 'Vazirmatn',
   headingFontSize: '16px',
   headingBold: true,
   headingColor: '#0f172a',
   pageBreakPerStudy: false,
+  preprintedLetterheadMode: false,
+  preprintedTopMarginMm: 45,
+  preprintedBottomMarginMm: 35,
+  monochromePrintMode: false,
+  lanSyncEnabled: false,
+  autoFolderBackupEnabled: false,
   customFonts: [
-    { id: 'f-vazir', name: 'وزیرمتن (استاندارد)', family: "'Vazirmatn', sans-serif" },
+    { id: 'f-vazir', name: 'وزیرمتن (Vazirmatn)', family: "'Vazirmatn', sans-serif" },
     { id: 'f-sahel', name: 'ساحل (Sahel)', family: "'Sahel', sans-serif" },
     { id: 'f-samim', name: 'صمیم (Samim)', family: "'Samim', sans-serif" },
-    { id: 'f-shabnam', name: 'شبنم (Shabnam)', family: "'Shabnam', Tahoma, sans-serif" },
-    { id: 'f-bnazanin', name: 'بی‌نازنین (B Nazanin)', family: "'B Nazanin', Tahoma, Arial" },
-    { id: 'f-byekan', name: 'بی‌یکان (B Yekan)', family: "'B Yekan', Tahoma, Arial" },
-    { id: 'f-iransans', name: 'ایران‌سنس (IRANSans)', family: "'IRANSans', Tahoma, sans-serif" },
-    { id: 'f-noto', name: 'نوتو عربیک (Noto Sans Arabic)', family: "'Noto Sans Arabic', sans-serif" },
+    { id: 'f-shabnam', name: 'شبنم (Shabnam)', family: "'Shabnam', sans-serif" },
+    { id: 'f-parastoo', name: 'پرستو (Parastoo)', family: "'Parastoo', serif" },
+    { id: 'f-tanha', name: 'تنها (Tanha)', family: "'Tanha', sans-serif" },
+    { id: 'f-lalezar', name: 'لاله‌زار (Lalezar)', family: "'Lalezar', display" },
+    { id: 'f-btitr', name: 'بی‌تیتر (B Titr)', family: "'B Titr', 'BTitrBold', sans-serif" },
+    { id: 'f-bnazanin', name: 'بی‌نازنین (B Nazanin)', family: "'B Nazanin', 'BNazanin', 'Parastoo', serif" },
+    { id: 'f-byekan', name: 'بی‌یکان (B Yekan)', family: "'B Yekan', 'Yekan', sans-serif" },
+    { id: 'f-iransans', name: 'ایران‌سنس (IRANSans)', family: "'IRANSans', 'IRANSansWeb', sans-serif" },
+    { id: 'f-amiri', name: 'امیری (Amiri)', family: "'Amiri', serif" },
+    { id: 'f-markazi', name: 'مارکزی (Markazi Text)', family: "'Markazi Text', serif" },
+    { id: 'f-naskh', name: 'نوتو نسخ (Noto Naskh Arabic)', family: "'Noto Naskh Arabic', serif" },
+    { id: 'f-noto', name: 'نوتو سنس (Noto Sans Arabic)', family: "'Noto Sans Arabic', sans-serif" },
+    { id: 'f-readex', name: 'ریدکس (Readex Pro)', family: "'Readex Pro', sans-serif" },
     { id: 'f-tahoma', name: 'تاهوما (Tahoma)', family: "Tahoma, sans-serif" },
     { id: 'f-arial', name: 'آریال (Arial)', family: "Arial, sans-serif" },
     { id: 'f-times', name: 'تایمز (Times New Roman)', family: "'Times New Roman', serif" },
@@ -80,7 +148,7 @@ const DEFAULT_SETTINGS: AppSettings = {
 };
 
 export const StorageService = {
-  // DOCTORS
+  // DOCTORS (هر پزشک دارای امضای دیجیتال کاملاً مستقل است)
   getDoctors(): Doctor[] {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.DOCTORS);
@@ -88,7 +156,23 @@ export const StorageService = {
         localStorage.setItem(STORAGE_KEYS.DOCTORS, JSON.stringify(DEFAULT_DOCTORS));
         return DEFAULT_DOCTORS;
       }
-      return JSON.parse(data);
+      const parsed: Doctor[] = JSON.parse(data);
+      if (!Array.isArray(parsed) || parsed.length === 0) return DEFAULT_DOCTORS;
+      let changed = false;
+      const hydrated = parsed.map((doc) => {
+        if (doc.signatureUrl === undefined) {
+          const defDoc = DEFAULT_DOCTORS.find((d) => d.id === doc.id);
+          if (defDoc?.signatureUrl) {
+            changed = true;
+            return { ...doc, signatureUrl: defDoc.signatureUrl };
+          }
+        }
+        return doc;
+      });
+      if (changed) {
+        localStorage.setItem(STORAGE_KEYS.DOCTORS, JSON.stringify(hydrated));
+      }
+      return hydrated;
     } catch {
       return DEFAULT_DOCTORS;
     }
@@ -439,7 +523,8 @@ export const StorageService = {
         doctorId: 'doc-1',
         typistId: 'typ-1',
         typistName: 'خانم رضایی',
-        status: 'finalized',
+        status: 'printed',
+        isLocked: true,
         createdAt: todayIso,
         updatedAt: todayIso,
         patientInfo: {
@@ -463,6 +548,31 @@ export const StorageService = {
             impressionHtml: '<p>بررسی سونوگرافی شکم و لگن نرمال فیزیولوژیک می‌باشد.</p>',
             showRecommendations: false,
             recommendationsHtml: '',
+          },
+        ],
+        revisions: [
+          {
+            id: 'rev-sample-1',
+            version: 1,
+            savedAt: todayIso,
+            savedAtFa: `${todayFa} - ۱۰:۱۵`,
+            typistName: 'خانم رضایی',
+            status: 'printed',
+            note: 'نسخه چاپ‌شده و تحویل به بیمار',
+            studies: [
+              {
+                id: 'study-sample-1',
+                modality: 'sonography',
+                titleAndTechnique: 'سونوگرافی کامل شکم و لگن با پروب کانوکس ۳.۵ مگاهرتز',
+                findingsHtml: '<p><strong>کبد:</strong> دارای ابعاد و لبه‌های طبیعی است. اکوپترن پارانشیم هموژن و فاقد ضایعه فضاگیر است.</p><p><strong>کیسه صفرا:</strong> جدار نازک و فاقد سنگ یا لجن صفراوی.</p><p><strong>کلیه‌ها و مثانه:</strong> وضعیت و اندازه نرمال، بدون سنگ یا هیدرونفروز.</p>',
+                showComparison: false,
+                comparison: '',
+                showImpression: true,
+                impressionHtml: '<p>بررسی سونوگرافی شکم و لگن نرمال فیزیولوژیک می‌باشد.</p>',
+                showRecommendations: false,
+                recommendationsHtml: '',
+              },
+            ],
           },
         ],
       },
@@ -585,34 +695,133 @@ export const StorageService = {
     }
   },
 
-  saveReport(report: Omit<MedicalReport, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }): MedicalReport {
+  saveReport(
+    report: Omit<MedicalReport, 'id' | 'createdAt' | 'updatedAt'> & { id?: string; revisionNote?: string }
+  ): MedicalReport {
     const reports = this.getSavedReports();
     const now = new Date().toISOString();
+    let nowFa = '۱۴۰۴/۰۸/۲۱';
+    try {
+      const dFa = new Intl.DateTimeFormat('fa-IR-u-nu-latn').format(new Date());
+      const tFa = new Intl.DateTimeFormat('fa-IR', { hour: '2-digit', minute: '2-digit' }).format(
+        new Date()
+      );
+      nowFa = `${dFa} - ${tFa}`;
+    } catch {}
+
     let updatedReport: MedicalReport;
+
+    const createRevisionItem = (
+      versionNum: number,
+      studiesSnap: MedicalReport['studies'],
+      statusSnap: MedicalReport['status'],
+      typName: string,
+      noteText: string
+    ): ReportRevision => ({
+      id: `rev-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      version: versionNum,
+      savedAt: now,
+      savedAtFa: nowFa,
+      typistName: typName || 'تایپیست',
+      status: statusSnap,
+      note: noteText,
+      studies: JSON.parse(JSON.stringify(studiesSnap)),
+    });
 
     if (report.id) {
       const existingIndex = reports.findIndex((r) => r.id === report.id);
       if (existingIndex >= 0) {
+        const prev = reports[existingIndex];
+        const prevRevisions = Array.isArray(prev.revisions) ? [...prev.revisions] : [];
+
+        // Ensure initial version is recorded if revisions array was empty
+        if (prevRevisions.length === 0 && prev.studies?.length > 0) {
+          prevRevisions.push(
+            createRevisionItem(
+              1,
+              prev.studies,
+              prev.status,
+              prev.typistName || 'تایپیست',
+              prev.status === 'printed' ? 'نسخه چاپ‌شده اولیه' : 'ثبت اولیه در آرشیو'
+            )
+          );
+        }
+
+        const prevStudiesJson = JSON.stringify(prev.studies || []);
+        const nextStudiesJson = JSON.stringify(report.studies || []);
+        const hasContentChanged = prevStudiesJson !== nextStudiesJson;
+        const isBecomingPrinted = report.status === 'printed' && prev.status !== 'printed';
+
+        if (hasContentChanged || isBecomingPrinted || report.revisionNote) {
+          const nextVer = prevRevisions.length + 1;
+          const noteLabel =
+            report.revisionNote ||
+            (report.status === 'printed'
+              ? nextVer > 1
+                ? 'چاپ مجدد پس از اصلاحیه'
+                : 'نسخه چاپ‌شده نهایی'
+              : prev.status === 'printed' || prev.isLocked
+              ? 'اصلاحیه گزارش (Addendum)'
+              : 'ویرایش و بازنگری گزارش');
+
+          prevRevisions.push(
+            createRevisionItem(
+              nextVer,
+              report.studies,
+              report.status,
+              report.typistName || prev.typistName || 'تایپیست',
+              noteLabel
+            )
+          );
+        }
+
+        const shouldLock =
+          report.isLocked !== undefined
+            ? report.isLocked
+            : report.status === 'printed'
+            ? true
+            : Boolean(prev.isLocked);
+
         updatedReport = {
-          ...reports[existingIndex],
+          ...prev,
           ...report,
           id: report.id,
+          isLocked: shouldLock,
+          revisions: prevRevisions.slice(-12),
           updatedAt: now,
         };
         reports[existingIndex] = updatedReport;
       } else {
+        const firstRev = createRevisionItem(
+          1,
+          report.studies,
+          report.status,
+          report.typistName || 'تایپیست',
+          report.status === 'printed' ? 'نسخه چاپ‌شده اولیه' : 'ثبت اولیه در آرشیو'
+        );
         updatedReport = {
           ...report,
           id: report.id,
+          isLocked: report.status === 'printed' ? true : Boolean(report.isLocked),
+          revisions: [firstRev],
           createdAt: now,
           updatedAt: now,
         } as MedicalReport;
         reports.unshift(updatedReport);
       }
     } else {
+      const firstRev = createRevisionItem(
+        1,
+        report.studies,
+        report.status,
+        report.typistName || 'تایپیست',
+        report.status === 'printed' ? 'نسخه چاپ‌شده اولیه' : 'ثبت اولیه در آرشیو'
+      );
       updatedReport = {
         ...report,
         id: `rep-${Date.now()}`,
+        isLocked: report.status === 'printed' ? true : Boolean(report.isLocked),
+        revisions: [firstRev],
         createdAt: now,
         updatedAt: now,
       } as MedicalReport;
@@ -621,6 +830,25 @@ export const StorageService = {
 
     localStorage.setItem(STORAGE_KEYS.REPORTS, JSON.stringify(reports));
     return updatedReport;
+  },
+
+  unlockReportForAddendum(reportId: string): MedicalReport | null {
+    const reports = this.getSavedReports();
+    const idx = reports.findIndex((r) => r.id === reportId);
+    if (idx === -1) return null;
+    const target = reports[idx];
+    const updated: MedicalReport = {
+      ...target,
+      isLocked: false,
+      updatedAt: new Date().toISOString(),
+    };
+    reports[idx] = updated;
+    localStorage.setItem(STORAGE_KEYS.REPORTS, JSON.stringify(reports));
+    return updated;
+  },
+
+  saveAllReports(reports: MedicalReport[]): void {
+    localStorage.setItem(STORAGE_KEYS.REPORTS, JSON.stringify(reports));
   },
 
   deleteReport(id: string): MedicalReport[] {
@@ -638,6 +866,8 @@ export const StorageService = {
         return DEFAULT_SETTINGS;
       }
       const parsed = JSON.parse(data);
+      let needsSave = false;
+
       // Migrate old default clinic data to Shafa Hospital
       if (!parsed.clinicName || parsed.clinicName.includes('پارسیان') || !parsed.clinicSubtitle) {
         parsed.clinicName = DEFAULT_SETTINGS.clinicName;
@@ -645,11 +875,62 @@ export const StorageService = {
         parsed.clinicAddress = DEFAULT_SETTINGS.clinicAddress;
         parsed.clinicPhone = DEFAULT_SETTINGS.clinicPhone;
         parsed.clinicLogoText = '';
-        const merged = { ...DEFAULT_SETTINGS, ...parsed };
-        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(merged));
-        return merged;
+        needsSave = true;
       }
-      return { ...DEFAULT_SETTINGS, ...parsed };
+
+      // Sanitize any corrupted logo SVG data URI from earlier session
+      if (
+        typeof parsed.clinicLogoUrl === 'string' &&
+        (parsed.clinicLogoUrl.includes('9761%2022634') || parsed.clinicLogoUrl.includes('9761 22634'))
+      ) {
+        parsed.clinicLogoUrl = DEFAULT_CLINIC_LOGO_DATA_URI;
+        needsSave = true;
+      }
+
+      if (!parsed.modalityColors) {
+        parsed.modalityColors = DEFAULT_SETTINGS.modalityColors;
+        needsSave = true;
+      }
+      if (!Array.isArray(parsed.customDictionary) || parsed.customDictionary.length === 0) {
+        parsed.customDictionary = DEFAULT_SETTINGS.customDictionary;
+        needsSave = true;
+      }
+      if (!parsed.editorLineHeight) {
+        parsed.editorLineHeight = DEFAULT_SETTINGS.editorLineHeight;
+      }
+      if (!parsed.printLineHeight) {
+        parsed.printLineHeight = DEFAULT_SETTINGS.printLineHeight;
+      }
+      if (parsed.headerFont === 'Vazirmatn') {
+        parsed.headerFont = "'Vazirmatn', sans-serif";
+        needsSave = true;
+      }
+
+      // Upgrade built-in customFonts so newly added Persian web fonts (Lalezar, Amiri, Markazi, etc.) and webfont fallbacks are always present
+      const defaultFontsList = DEFAULT_SETTINGS.customFonts || [];
+      const defaultFontMap = new Map(defaultFontsList.map((f) => [f.id, f]));
+      const existingCustomFonts = Array.isArray(parsed.customFonts) ? parsed.customFonts : [];
+      const userAddedFonts = existingCustomFonts.filter((f: any) => f?.id && !defaultFontMap.has(f.id));
+      const mergedFonts = [...defaultFontsList, ...userAddedFonts];
+      if (JSON.stringify(existingCustomFonts) !== JSON.stringify(mergedFonts)) {
+        parsed.customFonts = mergedFonts;
+        needsSave = true;
+      }
+
+      const merged: AppSettings = {
+        ...DEFAULT_SETTINGS,
+        ...parsed,
+        customFonts: mergedFonts,
+        modalityColors: {
+          ...DEFAULT_SETTINGS.modalityColors!,
+          ...(parsed.modalityColors || {}),
+        },
+      };
+
+      if (needsSave) {
+        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(merged));
+      }
+      return merged;
     } catch {
       return DEFAULT_SETTINGS;
     }

@@ -1,5 +1,5 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { Modality, MedicalShortcut, PatientInfo, ReportStudy, MedicalTemplate } from '../types';
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
+import { Modality, MedicalShortcut, PatientInfo, ReportStudy, MedicalTemplate, MedicalReport, ReportRevision } from '../types';
 import {
   Sparkles,
   Zap,
@@ -13,6 +13,9 @@ import {
   Layers,
   ChevronDown,
   ChevronUp,
+  ChevronRight,
+  ChevronLeft,
+  LayoutGrid,
   SpellCheck,
   Check,
   X,
@@ -20,6 +23,23 @@ import {
   SlidersHorizontal,
   Pin,
   BookmarkPlus,
+  Maximize2,
+  Minimize2,
+  Columns,
+  Bold,
+  Italic,
+  Underline,
+  Eraser,
+  Copy,
+  AlignRight,
+  AlignCenter,
+  AlignLeft,
+  AlignJustify,
+  AlertTriangle,
+  Lock,
+  Unlock,
+  History,
+  RotateCcw,
 } from 'lucide-react';
 import { AiService } from '../services/aiService';
 import {
@@ -33,6 +53,10 @@ import {
   createSlotHtml,
   normalizeAndExtractSlots,
   autoWrapNumbersAsSlotsInHtml,
+  detectLateralityMismatches,
+  fixStudyLateralityMismatch,
+  cleanMedicalTextWhitespaceAndDuplicates,
+  paginateStudiesIntoA4Pages,
 } from '../services/typistUtils';
 
 interface RichMedicalEditorProps {
@@ -53,12 +77,24 @@ interface RichMedicalEditorProps {
   headingFontSize?: string;
   defaultFont?: string;
   defaultFontSize?: number;
+  onChangeDefaultFontSize?: (size: number) => void;
   onShowToast?: (msg: string) => void;
   editorZoom?: number;
   templates?: MedicalTemplate[];
   onApplyPinnedTemplate?: (template: MedicalTemplate, targetStudyId: string) => void;
   onTogglePinTemplate?: (templateId: string) => void;
   onStartQuickSaveAsTemplate?: (studyId: string) => void;
+  zenMode?: boolean;
+  onToggleZenMode?: () => void;
+  savedReports?: MedicalReport[];
+  onExecCommand?: (command: string, value?: string) => void;
+  // Proposal #12: Printed Report Security Lock & Version History
+  isReportLocked?: boolean;
+  onUnlockReportForAddendum?: () => void;
+  reportRevisions?: ReportRevision[];
+  onRestoreReportRevision?: (revision: ReportRevision) => void;
+  editorLineHeight?: number;
+  printLineHeight?: number;
 }
 
 export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
@@ -79,12 +115,23 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
   headingFontSize = '16px',
   defaultFont = 'Vazirmatn',
   defaultFontSize = 14,
+  onChangeDefaultFontSize,
   onShowToast,
   editorZoom = 100,
   templates = [],
   onApplyPinnedTemplate,
   onTogglePinTemplate,
   onStartQuickSaveAsTemplate,
+  zenMode = false,
+  onToggleZenMode,
+  savedReports = [],
+  onExecCommand,
+  isReportLocked = false,
+  onUnlockReportForAddendum,
+  reportRevisions = [],
+  onRestoreReportRevision,
+  editorLineHeight = 1.9,
+  printLineHeight = 1.75,
 }) => {
   const [activeStudyId, setActiveStudyId] = useState<string>(studies[0]?.id || '');
   const [activeSuggestions, setActiveSuggestions] = useState<string[]>([]);
@@ -92,6 +139,20 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
   const [generatingImpressionId, setGeneratingImpressionId] = useState<string | null>(null);
   const [quickMacroFilter, setQuickMacroFilter] = useState<'all' | 'normal' | 'pathology'>('all');
   const [expandedMoreInfo, setExpandedMoreInfo] = useState<Record<string, boolean>>({});
+  const [isVersionHistoryModalOpen, setIsVersionHistoryModalOpen] = useState(false);
+
+  // Split-Screen Prior Report Comparison state
+  const [isSplitComparisonOpen, setIsSplitComparisonOpen] = useState(false);
+  const [selectedPriorReportId, setSelectedPriorReportId] = useState<string>('');
+
+  // Floating Selection Formatting Toolbar state
+  const [floatingToolbarPos, setFloatingToolbarPos] = useState<{ top: number; left: number } | null>(
+    null
+  );
+  const [floatingFontName, setFloatingFontName] = useState<string>(defaultFont || 'Vazirmatn');
+  const [floatingFontSize, setFloatingFontSize] = useState<string>('3');
+  const isInteractingWithFloatingRef = useRef<boolean>(false);
+  const floatingToolbarRef = useRef<HTMLDivElement | null>(null);
 
   // Live matched shortcut hint when typing `.xyz`
   const [pendingShortcutMatch, setPendingShortcutMatch] = useState<MedicalShortcut | null>(null);
@@ -115,6 +176,24 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
   const findingsRefs = useRef<Record<string, HTMLDivElement | null>>({});
   // Ref map for title textarea elements
   const titleRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
+
+  // Pinned templates horizontal scroll ref & multi-line wrap toggle (for hospital mice without horizontal scroll)
+  const pinsScrollRef = useRef<HTMLDivElement | null>(null);
+  const [isPinsMultiLineWrap, setIsPinsMultiLineWrap] = useState(false);
+
+  const handleWheelPinsScroll = (e: React.WheelEvent<HTMLDivElement>) => {
+    if (isPinsMultiLineWrap || !pinsScrollRef.current) return;
+    if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+      e.preventDefault();
+      pinsScrollRef.current.scrollLeft -= e.deltaY * 1.3;
+    }
+  };
+
+  const scrollPinsBy = (direction: 'right' | 'left') => {
+    if (!pinsScrollRef.current) return;
+    const offset = direction === 'right' ? 220 : -220;
+    pinsScrollRef.current.scrollBy({ left: offset, behavior: 'smooth' });
+  };
 
   // Ensure activeStudyId points to an existing study
   useEffect(() => {
@@ -350,6 +429,80 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
       onShowToast(`✓ تمامی ${count} مورد هایلایت‌شده اصلاح گردید.`);
     }
   };
+
+  // 1-Click Automated Text Cleanup: Removes consecutive duplicate words, extra spaces, and fixes half-spaces
+  const handleAutoCleanMedicalText = useCallback(() => {
+    if (isReportLocked) return;
+
+    let totalDuplicates = 0;
+    let totalSpaces = 0;
+    let totalSpellZwnj = 0;
+
+    studies.forEach((study) => {
+      const titleRes = cleanMedicalTextWhitespaceAndDuplicates(study.titleAndTechnique, false);
+      const currentFindings = findingsRefs.current[study.id]?.innerHTML || study.findingsHtml;
+      const findingsRes = cleanMedicalTextWhitespaceAndDuplicates(currentFindings, true);
+      const compRes = study.comparison
+        ? cleanMedicalTextWhitespaceAndDuplicates(study.comparison, false)
+        : { cleaned: study.comparison, duplicateWordsRemoved: 0, extraSpacesRemoved: 0, spellAndZwnjFixed: 0, totalFixes: 0 };
+      const impRes = study.impressionHtml
+        ? cleanMedicalTextWhitespaceAndDuplicates(study.impressionHtml, true)
+        : { cleaned: study.impressionHtml, duplicateWordsRemoved: 0, extraSpacesRemoved: 0, spellAndZwnjFixed: 0, totalFixes: 0 };
+      const recRes = study.recommendationsHtml
+        ? cleanMedicalTextWhitespaceAndDuplicates(study.recommendationsHtml, true)
+        : { cleaned: study.recommendationsHtml, duplicateWordsRemoved: 0, extraSpacesRemoved: 0, spellAndZwnjFixed: 0, totalFixes: 0 };
+
+      totalDuplicates +=
+        titleRes.duplicateWordsRemoved +
+        findingsRes.duplicateWordsRemoved +
+        compRes.duplicateWordsRemoved +
+        impRes.duplicateWordsRemoved +
+        recRes.duplicateWordsRemoved;
+
+      totalSpaces +=
+        titleRes.extraSpacesRemoved +
+        findingsRes.extraSpacesRemoved +
+        compRes.extraSpacesRemoved +
+        impRes.extraSpacesRemoved +
+        recRes.extraSpacesRemoved;
+
+      totalSpellZwnj +=
+        titleRes.spellAndZwnjFixed +
+        findingsRes.spellAndZwnjFixed +
+        compRes.spellAndZwnjFixed +
+        impRes.spellAndZwnjFixed +
+        recRes.spellAndZwnjFixed;
+
+      const el = findingsRefs.current[study.id];
+      if (el && el.innerHTML !== findingsRes.cleaned) {
+        el.innerHTML = findingsRes.cleaned;
+      }
+
+      onUpdateStudy(study.id, {
+        titleAndTechnique: titleRes.cleaned,
+        findingsHtml: findingsRes.cleaned,
+        comparison: compRes.cleaned,
+        impressionHtml: impRes.cleaned,
+        recommendationsHtml: recRes.cleaned,
+      });
+    });
+
+    setDetectedIssues([]);
+    setSelectedIssue(null);
+
+    const totalAll = totalDuplicates + totalSpaces + totalSpellZwnj;
+    if (onShowToast) {
+      if (totalAll > 0) {
+        const parts: string[] = [];
+        if (totalDuplicates > 0) parts.push(`${totalDuplicates} کلمه تکراری متوالی`);
+        if (totalSpaces > 0) parts.push(`${totalSpaces} فاصله اضافه`);
+        if (totalSpellZwnj > 0) parts.push(`${totalSpellZwnj} مورد املا و نیم‌فاصله`);
+        onShowToast(`✨ پاکسازی خودکار متن انجام شد: ${parts.join('، ')} اصلاح و حذف گردید.`);
+      } else {
+        onShowToast('✓ متن گزارش کاملاً تمیز است (کلمه تکراری، فاصله اضافه یا خطای نیم‌فاصله یافت نشد).');
+      }
+    }
+  }, [studies, isReportLocked, onUpdateStudy, onShowToast]);
 
   // Global keyboard shortcut: Alt + C -> Highlight Spell & Half-Space Issues
   useEffect(() => {
@@ -604,21 +757,305 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
     (t) => t.isPinned && t.modality === currentModality
   );
 
-  // Global keyboard shortcuts F1..F8 for Pinned Templates of the current modality
+  // Global keyboard shortcuts:
+  // 1. F1..F8 for Pinned Templates of the current modality
+  // 2. Alt+F or F11 for Zen / Full Focus Typing Mode
+  // 3. Custom Keyboard Hotkeys defined in ShortcutsModal (e.g., Alt+T, Alt+M, Alt+G)
   useEffect(() => {
-    const handlePinnedKeyDown = (e: KeyboardEvent) => {
+    const handlePinnedAndCustomKeyDown = (e: KeyboardEvent) => {
+      // Zen / Focus Mode: Alt+F or F11
+      if (
+        (e.altKey && (e.key === 'f' || e.key === 'F' || e.key === 'ب' || e.code === 'KeyF')) ||
+        e.key === 'F11'
+      ) {
+        if (onToggleZenMode) {
+          e.preventDefault();
+          onToggleZenMode();
+          return;
+        }
+      }
+
+      // F1..F8 Pinned Templates
       if (/^F[1-8]$/.test(e.key) && !e.ctrlKey && !e.altKey && !e.metaKey) {
         const idx = parseInt(e.key.slice(1), 10) - 1;
         const targetPinned = pinnedTemplates[idx];
         if (targetPinned && onApplyPinnedTemplate) {
           e.preventDefault();
           onApplyPinnedTemplate(targetPinned, activeStudyId || studies[0]?.id || '');
+          return;
+        }
+      }
+
+      // Custom Hotkeys (e.g., Alt+T, Alt+M, Ctrl+Shift+1)
+      if (e.altKey || e.ctrlKey || e.metaKey) {
+        const parts: string[] = [];
+        if (e.ctrlKey || e.metaKey) parts.push('ctrl');
+        if (e.altKey) parts.push('alt');
+        if (e.shiftKey) parts.push('shift');
+
+        let keyChar = e.key.length === 1 ? e.key.toLowerCase() : e.key.toLowerCase();
+        if (e.code && e.code.startsWith('Key')) {
+          keyChar = e.code.replace('Key', '').toLowerCase();
+        } else if (e.code && e.code.startsWith('Digit')) {
+          keyChar = e.code.replace('Digit', '').toLowerCase();
+        }
+        parts.push(keyChar);
+        const pressedCombo = parts.join('+');
+
+        const matchedShortcut = shortcuts.find(
+          (sc) => sc.hotkey && sc.hotkey.toLowerCase() === pressedCombo
+        );
+        if (matchedShortcut) {
+          e.preventDefault();
+          const targetStudyId = activeStudyId || studies[0]?.id || '';
+          if (matchedShortcut.targetTemplateId && onApplyPinnedTemplate) {
+            const matchedTpl = templates.find((t) => t.id === matchedShortcut.targetTemplateId);
+            if (matchedTpl) {
+              onApplyPinnedTemplate(matchedTpl, targetStudyId);
+              if (onShowToast) {
+                onShowToast(
+                  `⌨️ کلید میانبر «${matchedShortcut.hotkey}»: قالب «${matchedTpl.title}» اعمال شد.`
+                );
+              }
+              return;
+            }
+          }
+          insertSuggestionAtCursor(`${matchedShortcut.expansion} `, targetStudyId);
+          if (onShowToast) {
+            onShowToast(
+              `⌨️ کلید میانبر «${matchedShortcut.hotkey}» (${matchedShortcut.label}) درج شد.`
+            );
+          }
         }
       }
     };
-    window.addEventListener('keydown', handlePinnedKeyDown);
-    return () => window.removeEventListener('keydown', handlePinnedKeyDown);
-  }, [pinnedTemplates, onApplyPinnedTemplate, activeStudyId, studies]);
+    window.addEventListener('keydown', handlePinnedAndCustomKeyDown);
+    return () => window.removeEventListener('keydown', handlePinnedAndCustomKeyDown);
+  }, [
+    pinnedTemplates,
+    templates,
+    onApplyPinnedTemplate,
+    activeStudyId,
+    studies,
+    shortcuts,
+    insertSuggestionAtCursor,
+    onShowToast,
+    onToggleZenMode,
+  ]);
+
+  // Floating Selection Formatting Toolbar tracker inside active contentEditable
+  useEffect(() => {
+    const updateFloatingToolbar = () => {
+      if (isInteractingWithFloatingRef.current) {
+        return;
+      }
+      const sel = window.getSelection();
+      const activeEl = findingsRefs.current[activeStudyId];
+      if (
+        !sel ||
+        sel.isCollapsed ||
+        sel.rangeCount === 0 ||
+        !activeEl ||
+        !activeEl.contains(sel.anchorNode)
+      ) {
+        setFloatingToolbarPos(null);
+        return;
+      }
+      const selectedText = sel.toString().trim();
+      if (!selectedText) {
+        setFloatingToolbarPos(null);
+        return;
+      }
+      const range = sel.getRangeAt(0);
+      const rect = range.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) {
+        setFloatingToolbarPos(null);
+        return;
+      }
+
+      const viewportW = document.documentElement.clientWidth || window.innerWidth;
+      const editorRect = activeEl.getBoundingClientRect();
+      const toolbarW = floatingToolbarRef.current?.offsetWidth || 450;
+      const toolbarH = floatingToolbarRef.current?.offsetHeight || 38;
+
+      // Keep toolbar strictly inside both the viewport and the active editor horizontal boundaries
+      const idealLeft = rect.left + rect.width / 2 - toolbarW / 2;
+      const minLeft = Math.max(12, editorRect.left + 8);
+      const maxLeft = Math.min(
+        viewportW - toolbarW - 12,
+        Math.max(minLeft, editorRect.right - toolbarW - 8)
+      );
+      const left = Math.max(12, Math.min(maxLeft, Math.max(minLeft, idealLeft)));
+
+      // Prevent toolbar from hiding under top sticky bars when selecting the first line
+      const quickbarBottom =
+        document.getElementById('app-editor-quickbar')?.getBoundingClientRect().bottom || 0;
+      const tabsbarBottom =
+        document.getElementById('app-patient-tabs-bar')?.getBoundingClientRect().bottom || 0;
+      const navbarBottom =
+        document.getElementById('app-main-navbar')?.getBoundingClientRect().bottom || 0;
+      const minAllowedTop = Math.max(quickbarBottom, tabsbarBottom, navbarBottom, 12) + 6;
+
+      let top = rect.top - toolbarH - 8;
+      if (top < minAllowedTop) {
+        top = rect.bottom + 8;
+      }
+
+      setFloatingToolbarPos({ top, left });
+    };
+
+    document.addEventListener('selectionchange', updateFloatingToolbar);
+    window.addEventListener('resize', updateFloatingToolbar);
+    window.addEventListener('scroll', updateFloatingToolbar, true);
+    return () => {
+      document.removeEventListener('selectionchange', updateFloatingToolbar);
+      window.removeEventListener('resize', updateFloatingToolbar);
+      window.removeEventListener('scroll', updateFloatingToolbar, true);
+    };
+  }, [activeStudyId]);
+
+  // Post-render exact pixel boundary check so the floating toolbar never overflows on the first frame
+  useEffect(() => {
+    if (!floatingToolbarPos || !floatingToolbarRef.current) return;
+    const el = floatingToolbarRef.current;
+    const r = el.getBoundingClientRect();
+    const viewportW = document.documentElement.clientWidth || window.innerWidth;
+    const activeEl = findingsRefs.current[activeStudyId];
+    const editorRight = activeEl
+      ? Math.min(viewportW - 12, activeEl.getBoundingClientRect().right - 8)
+      : viewportW - 12;
+
+    let adjustedLeft = floatingToolbarPos.left;
+    if (r.right > editorRight) {
+      adjustedLeft -= r.right - editorRight;
+    }
+    if (adjustedLeft < 12) {
+      adjustedLeft = 12;
+    }
+    if (Math.abs(adjustedLeft - floatingToolbarPos.left) > 1) {
+      setFloatingToolbarPos((prev) => (prev ? { ...prev, left: adjustedLeft } : null));
+    }
+  }, [floatingToolbarPos, activeStudyId]);
+
+  const executeFloatingFormat = (command: string, value?: string) => {
+    if (onExecCommand) {
+      onExecCommand(command, value);
+    } else {
+      document.execCommand(command, false, value);
+    }
+  };
+
+  // Apply direction (RTL or LTR) to the selected block/paragraph from Floating Toolbar
+  const applyFloatingDirection = (dir: 'rtl' | 'ltr') => {
+    const activeEl = findingsRefs.current[activeStudyId];
+    if (activeEl) {
+      activeEl.focus();
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0) {
+        const node = sel.anchorNode;
+        const el =
+          node?.nodeType === Node.ELEMENT_NODE
+            ? (node as HTMLElement)
+            : node?.parentElement;
+        const block = el?.closest('p, div, li, h1, h2, h3, h4, td') as HTMLElement | null;
+        if (block && activeEl.contains(block) && block !== activeEl) {
+          block.setAttribute('dir', dir);
+          block.style.direction = dir;
+          block.style.textAlign = dir === 'rtl' ? 'right' : 'left';
+        } else {
+          activeEl.setAttribute('dir', dir);
+          activeEl.style.direction = dir;
+        }
+        onUpdateStudy(activeStudyId, { findingsHtml: activeEl.innerHTML });
+      }
+    }
+  };
+
+  // Proposal #2: Real-Time Laterality (Right vs Left) Mismatch Detection
+  const lateralityMismatches = useMemo(() => {
+    return detectLateralityMismatches(studies);
+  }, [studies]);
+
+  // Proposal #6: Real-Time Visual A4 Page Capacity & Multi-Page Pagination Meter (100% synchronized with PrintPreviewModal)
+  const a4PageMetrics = useMemo(() => {
+    return paginateStudiesIntoA4Pages(studies, {
+      defaultFontSize: defaultFontSize || 14,
+      printLineHeight: printLineHeight || 1.75,
+    });
+  }, [studies, defaultFontSize, printLineHeight]);
+
+  const handleAutoFixLaterality = (studyId: string, expectedSide: 'right' | 'left') => {
+    const target = studies.find((s) => s.id === studyId);
+    if (!target) return;
+    const fixedFindings = fixStudyLateralityMismatch(target.findingsHtml, expectedSide);
+    const fixedImpression = fixStudyLateralityMismatch(target.impressionHtml, expectedSide);
+    const el = findingsRefs.current[studyId];
+    if (el) {
+      el.innerHTML = fixedFindings;
+    }
+    onUpdateStudy(studyId, {
+      findingsHtml: fixedFindings,
+      impressionHtml: fixedImpression,
+    });
+    if (onShowToast) {
+      onShowToast(
+        `✓ جهت آناتومیک در متن گزارش متناسب با عنوان به «سمت ${
+          expectedSide === 'right' ? 'راست' : 'چپ'
+        }» اصلاح شد.`
+      );
+    }
+  };
+
+  // Match prior reports for the current patient (by nationalId or fullName)
+  const patientPriorReports = useMemo(() => {
+    const cleanNid = (patientInfo.nationalId || '').trim();
+    const cleanName = (patientInfo.fullName || '').trim();
+    const matched = savedReports.filter((r) => {
+      if (cleanNid && r.patientInfo?.nationalId?.trim() === cleanNid) return true;
+      if (cleanName.length >= 3 && r.patientInfo?.fullName?.trim() === cleanName) return true;
+      return false;
+    });
+    return matched.length > 0 ? matched : savedReports;
+  }, [savedReports, patientInfo.nationalId, patientInfo.fullName]);
+
+  const exactPatientPriorCount = useMemo(() => {
+    const cleanNid = (patientInfo.nationalId || '').trim();
+    const cleanName = (patientInfo.fullName || '').trim();
+    if (!cleanNid && cleanName.length < 3) return 0;
+    return savedReports.filter((r) => {
+      if (cleanNid && r.patientInfo?.nationalId?.trim() === cleanNid) return true;
+      if (cleanName.length >= 3 && r.patientInfo?.fullName?.trim() === cleanName) return true;
+      return false;
+    }).length;
+  }, [savedReports, patientInfo.nationalId, patientInfo.fullName]);
+
+  const activePriorReport = useMemo(() => {
+    return (
+      patientPriorReports.find((r) => r.id === selectedPriorReportId) ||
+      patientPriorReports[0] ||
+      null
+    );
+  }, [patientPriorReports, selectedPriorReportId]);
+
+  const handleCopyPriorToComparison = (priorRep: MedicalReport) => {
+    const targetStudy = studies.find((s) => s.id === activeStudyId) || studies[0];
+    if (!targetStudy) return;
+    const priorStudy = priorRep.studies?.[0];
+    const priorPlain = (priorStudy?.impressionHtml || priorStudy?.findingsHtml || '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 220);
+    const compText = `در مقایسه با بررسی پیشین مورخ ${priorRep.patientInfo?.reportDate || 'قبلی'}: ${priorPlain}`;
+    onUpdateStudy(targetStudy.id, {
+      showComparison: true,
+      comparison: compText,
+    });
+    setExpandedMoreInfo((prev) => ({ ...prev, [targetStudy.id]: true }));
+    if (onShowToast) {
+      onShowToast('✓ خلاصه گزارش قبلی در بخش مقایسه (Comparison) گزارش فعلی درج شد.');
+    }
+  };
 
   const filteredShortcuts = shortcuts.filter((sc) => {
     const matchesModality = !sc.modality || sc.modality === 'all' || sc.modality === activeStudy?.modality;
@@ -692,7 +1129,7 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
       <div
         id="app-editor-quickbar"
         style={{
-          top: 'calc(var(--navbar-height, 102px) + var(--tabsbar-height, 44px) + var(--toolbar-height, 46px))',
+          top: 'calc(var(--navbar-height, 102px) + var(--tabsbar-height, 44px))',
         }}
         className="w-full sticky z-20 bg-slate-100/95 backdrop-blur-md pt-0.5 pb-1 space-y-1 border-b border-slate-200/80 shadow-2xs no-print transition-all duration-200"
       >
@@ -819,19 +1256,85 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
               </div>
             )}
 
-            {/* Highlight-First Spell & Half-Space Checker (Alt + C) - Slim h-7 */}
+            {/* Spell & Half-Space Checker + 1-Click Automated Text Cleanup Group */}
+            <div className="inline-flex items-center rounded-lg border border-slate-200 bg-white shadow-2xs overflow-hidden">
+              <button
+                type="button"
+                onClick={handleHighlightSpellIssues}
+                className="h-7 px-2.5 hover:bg-amber-50 text-slate-700 hover:text-amber-900 inline-flex items-center justify-center gap-1.5 text-[11px] font-bold whitespace-nowrap transition-colors duration-150 cursor-pointer"
+                title="هایلایت کردن غلط‌های املایی، نیم‌فاصله‌ها و کلمات تکراری در متن (Alt+C)"
+              >
+                <SpellCheck className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+                <span>بررسی املا و نیم‌فاصله</span>
+                <kbd className="bg-slate-100 text-slate-600 border border-slate-200 px-1 py-0.2 rounded text-[9.5px] font-mono">
+                  Alt+C
+                </kbd>
+              </button>
+              <div className="w-px h-4 bg-slate-200" />
+              <button
+                type="button"
+                onClick={handleAutoCleanMedicalText}
+                className="h-7 px-2.5 bg-teal-50/70 hover:bg-teal-600 text-teal-800 hover:text-white inline-flex items-center justify-center gap-1 text-[11px] font-bold whitespace-nowrap transition-colors duration-150 cursor-pointer"
+                title="پاکسازی خودکار متن با یک کلیک: حذف کلمات تکراری متوالی، حذف فاصله‌های اضافه (Space) و اصلاح نیم‌فاصله‌ها"
+              >
+                <Wand2 className="w-3 h-3 shrink-0" />
+                <span>پاکسازی خودکار متن</span>
+              </button>
+            </div>
+
+            {/* Split-Screen Prior Report Comparison Toggle */}
             <button
               type="button"
-              onClick={handleHighlightSpellIssues}
-              className="h-7 px-2.5 bg-white hover:bg-amber-50 text-slate-700 hover:text-amber-900 border border-slate-200 hover:border-amber-300 rounded-lg inline-flex items-center justify-center gap-1.5 text-[11px] font-bold whitespace-nowrap shadow-2xs transition-all duration-200 cursor-pointer active:scale-95"
-              title="هایلایت کردن غلط‌های املایی و نیم‌فاصله‌ها در متن و پیشنهاد جایگزین هنگام انتخاب (Alt+C)"
+              onClick={() => setIsSplitComparisonOpen((prev) => !prev)}
+              className={`h-7 px-2.5 rounded-lg inline-flex items-center justify-center gap-1.5 text-[11px] font-bold border whitespace-nowrap transition-all duration-200 cursor-pointer active:scale-95 ${
+                isSplitComparisonOpen
+                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                  : exactPatientPriorCount > 0
+                  ? 'bg-indigo-50 text-indigo-900 border-indigo-300 hover:bg-indigo-100'
+                  : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200'
+              }`}
+              title="نمای دوبرگه کنار هم: مشاهده گزارش قبلی بیمار در کنار گزارش فعلی و مقایسه یافته‌ها"
             >
-              <SpellCheck className="w-3.5 h-3.5 text-teal-600 shrink-0" />
-              <span>بررسی املا و نیم‌فاصله</span>
-              <kbd className="bg-slate-100 text-slate-600 border border-slate-200 px-1 py-0.2 rounded text-[9.5px] font-mono">
-                Alt+C
-              </kbd>
+              <Columns className="w-3.5 h-3.5 shrink-0" />
+              <span>
+                مقایسه گزارش قبلی
+                {exactPatientPriorCount > 0 ? ` (${exactPatientPriorCount} سابقه)` : ''}
+              </span>
             </button>
+
+            {/* Zen / Full Focus Typing Mode Toggle (Alt+F) */}
+            {onToggleZenMode && (
+              <button
+                type="button"
+                onClick={onToggleZenMode}
+                className={`h-7 px-2.5 rounded-lg inline-flex items-center justify-center gap-1.5 text-[11px] font-bold border whitespace-nowrap transition-all duration-200 cursor-pointer active:scale-95 ${
+                  zenMode
+                    ? 'bg-teal-600 text-white border-teal-600 shadow-xs'
+                    : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200'
+                }`}
+                title="حالت تمرکز کامل تایپ: مخفی کردن پنل‌های جانبی و مشخصات بیمار برای تمرکز ۱۰۰٪ روی متن (Alt+F)"
+              >
+                {zenMode ? (
+                  <Minimize2 className="w-3.5 h-3.5 shrink-0" />
+                ) : (
+                  <Maximize2 className="w-3.5 h-3.5 shrink-0" />
+                )}
+                <span>{zenMode ? 'خروج از تمرکز (Alt+F)' : 'حالت تمرکز تایپ (Alt+F)'}</span>
+              </button>
+            )}
+
+            {/* Proposal #12: Version History Quick Button (Shown when report has saved revisions) */}
+            {reportRevisions.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setIsVersionHistoryModalOpen(true)}
+                className="h-7 px-2.5 rounded-lg inline-flex items-center justify-center gap-1.5 text-[11px] font-bold border bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border-indigo-200 whitespace-nowrap transition-all duration-200 cursor-pointer active:scale-95"
+                title="مشاهده تاریخچه نسخه‌ها و اصلاحیه‌های این گزارش و بازگردانی به نسخه قبلی"
+              >
+                <History className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                <span>تاریخچه نسخه‌ها ({reportRevisions.length})</span>
+              </button>
+            )}
           </div>
 
           {/* One-Click Convert All Numbers in Current Raw Template to Safe Slots */}
@@ -851,13 +1354,33 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
         </div>
 
         {/* 
-          ULTRA-SLIM SINGLE-LINE PINNED TEMPLATES STRIP (Harmonized with Active Modality Color)
+          PINNED TEMPLATES STRIP (Harmonized with Active Modality Color + Hospital Mouse Scroll & Multi-Line Wrap)
         */}
         {pinnedTemplates.length > 0 && (
           <div
-            className={`rounded-xl px-2.5 py-1 border flex items-center justify-between gap-2 transition-colors duration-200 ${activeTheme.pinStripBg}`}
+            className={`rounded-xl px-2.5 py-1 border flex items-center justify-between gap-1.5 transition-colors duration-200 ${activeTheme.pinStripBg}`}
           >
-            <div className="flex items-center gap-1 overflow-x-auto no-scrollbar flex-1 py-0.5">
+            {/* Scroll Right Arrow Button (for Hospital Mice) */}
+            {!isPinsMultiLineWrap && pinnedTemplates.length > 3 && (
+              <button
+                type="button"
+                onClick={() => scrollPinsBy('right')}
+                title="اسکرول سنجاق‌ها به راست (با چرخ موس هم می‌توانید روی سنجاق‌ها اسکرول کنید)"
+                className="w-6 h-6 rounded-md bg-white/80 hover:bg-white text-slate-700 border border-slate-200/80 flex items-center justify-center shrink-0 cursor-pointer active:scale-95 transition-colors shadow-2xs"
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            )}
+
+            <div
+              ref={pinsScrollRef}
+              onWheel={handleWheelPinsScroll}
+              className={`flex items-center gap-1 flex-1 py-0.5 ${
+                isPinsMultiLineWrap
+                  ? 'flex-wrap'
+                  : 'overflow-x-auto no-scrollbar scroll-smooth'
+              }`}
+            >
               <span
                 className={`inline-flex items-center gap-1 text-[11px] font-bold ml-1 shrink-0 whitespace-nowrap ${activeTheme.pinLabel}`}
               >
@@ -865,7 +1388,7 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                 <span>سنجاق‌های {modalityNames[currentModality]}:</span>
               </span>
 
-              {pinnedTemplates.slice(0, 8).map((tpl, idx) => (
+              {pinnedTemplates.map((tpl, idx) => (
                 <div
                   key={tpl.id}
                   className={`group h-6 inline-flex items-center rounded-md border text-[11px] font-bold transition-all duration-150 shrink-0 overflow-hidden ${activeTheme.pinChip}`}
@@ -876,12 +1399,18 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                       onApplyPinnedTemplate &&
                       onApplyPinnedTemplate(tpl, activeStudyId || studies[0]?.id || '')
                     }
-                    title={`اعمال فوری قالب «${tpl.title}» (کلید میانبر: F${idx + 1})`}
+                    title={
+                      idx < 8
+                        ? `اعمال فوری قالب «${tpl.title}» (کلید میانبر: F${idx + 1})`
+                        : `اعمال فوری قالب «${tpl.title}»`
+                    }
                     className="h-full inline-flex items-center gap-1 px-2 cursor-pointer whitespace-nowrap"
                   >
                     <span className={`w-1.5 h-1.5 rounded-full transition-colors ${activeTheme.pinDot}`} />
                     <span>{tpl.title}</span>
-                    <span className="text-[9px] font-mono opacity-65">F{idx + 1}</span>
+                    {idx < 8 && (
+                      <span className="text-[9px] font-mono opacity-65">F{idx + 1}</span>
+                    )}
                   </button>
 
                   {onTogglePinTemplate && (
@@ -901,13 +1430,50 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
               ))}
             </div>
 
-            <button
-              type="button"
-              onClick={() => onOpenTemplates(activeStudyId)}
-              className={`text-[10px] font-bold px-2 py-0.5 rounded-md hover:bg-white/70 transition-colors cursor-pointer shrink-0 whitespace-nowrap ${activeTheme.pinLabel}`}
-            >
-              + مدیریت
-            </button>
+            <div className="flex items-center gap-1 shrink-0">
+              {/* Scroll Left Arrow Button (for Hospital Mice) */}
+              {!isPinsMultiLineWrap && pinnedTemplates.length > 3 && (
+                <button
+                  type="button"
+                  onClick={() => scrollPinsBy('left')}
+                  title="اسکرول سنجاق‌ها به چپ (با چرخ موس هم می‌توانید روی سنجاق‌ها اسکرول کنید)"
+                  className="w-6 h-6 rounded-md bg-white/80 hover:bg-white text-slate-700 border border-slate-200/80 flex items-center justify-center shrink-0 cursor-pointer active:scale-95 transition-colors shadow-2xs"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                </button>
+              )}
+
+              {/* Multi-Line Wrap Toggle Button */}
+              {pinnedTemplates.length > 3 && (
+                <button
+                  type="button"
+                  onClick={() => setIsPinsMultiLineWrap((prev) => !prev)}
+                  title={
+                    isPinsMultiLineWrap
+                      ? 'بازگشت به نمایش تک‌خطی سنجاق‌ها'
+                      : 'نمایش چندخطی همه سنجاق‌ها (بدون نیاز به اسکرول افقی)'
+                  }
+                  className={`h-6 px-1.5 rounded-md border text-[10px] font-bold inline-flex items-center gap-1 transition-colors cursor-pointer shrink-0 ${
+                    isPinsMultiLineWrap
+                      ? 'bg-teal-600 text-white border-teal-600 shadow-2xs'
+                      : 'bg-white/80 hover:bg-white text-slate-700 border-slate-200/80'
+                  }`}
+                >
+                  <LayoutGrid className="w-3 h-3" />
+                  <span className="hidden sm:inline">
+                    {isPinsMultiLineWrap ? 'تک‌خطی' : 'همه سنجاق‌ها'}
+                  </span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => onOpenTemplates(activeStudyId)}
+                className={`text-[10px] font-bold px-2 py-0.5 rounded-md hover:bg-white/70 transition-colors cursor-pointer shrink-0 whitespace-nowrap ${activeTheme.pinLabel}`}
+              >
+                + مدیریت
+              </button>
+            </div>
           </div>
         )}
 
@@ -932,7 +1498,16 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                 </div>
               </div>
 
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <button
+                  type="button"
+                  onClick={handleAutoCleanMedicalText}
+                  className="px-3 py-1 bg-slate-900 hover:bg-teal-700 text-white rounded-xl text-xs font-bold shadow-2xs transition-colors cursor-pointer flex items-center gap-1.5"
+                  title="حذف کلمات تکراری متوالی، فاصله‌های اضافه و اصلاح یکجای املا و نیم‌فاصله‌ها"
+                >
+                  <Wand2 className="w-3.5 h-3.5 text-teal-300" />
+                  <span>پاکسازی خودکار متن (کلمات تکراری و فاصله اضافه)</span>
+                </button>
                 {detectedIssues.length > 1 && (
                   <button
                     type="button"
@@ -940,7 +1515,7 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                     className="px-3 py-1 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold shadow-2xs transition-colors cursor-pointer flex items-center gap-1"
                   >
                     <Check className="w-3.5 h-3.5" />
-                    <span>پذیرش و جایگزینی همه ({detectedIssues.length})</span>
+                    <span>پذیرش همه ({detectedIssues.length})</span>
                   </button>
                 )}
                 <button
@@ -1018,12 +1593,365 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
             )}
           </div>
         )}
+        {/* Proposal #2: Real-Time Laterality (Right vs Left) Safety Alert Banner */}
+        {lateralityMismatches.length > 0 && (
+          <div className="bg-rose-50/95 border-2 border-rose-400 rounded-2xl p-2.5 shadow-sm flex items-center justify-between flex-wrap gap-2 animate-fadeIn">
+            <div className="flex items-center gap-2 text-xs text-rose-950">
+              <div className="w-7 h-7 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-4 h-4" />
+              </div>
+              <div>
+                <div className="font-black text-rose-900">
+                  {lateralityMismatches[0].warningText}
+                </div>
+                <div className="text-[11px] text-rose-700">
+                  جهت جلوگیری از خطای پزشکی (Wrong-Side Error)، لطفاً جهت چپ/راست را بررسی یا با یک کلیک اصلاح نمایید.
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                handleAutoFixLaterality(
+                  lateralityMismatches[0].studyId,
+                  lateralityMismatches[0].expectedSide
+                )
+              }
+              className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-xs transition-colors cursor-pointer flex items-center gap-1.5 shrink-0"
+            >
+              <Check className="w-3.5 h-3.5" />
+              <span>
+                اصلاح خودکار به «سمت {lateralityMismatches[0].expectedSideLabel}»
+              </span>
+            </button>
+          </div>
+        )}
+
+        {/* Proposal #12: Printed Report Security Lock Banner */}
+        {isReportLocked && (
+          <div className="bg-amber-50/95 border border-amber-300 rounded-xl px-3 py-1.5 shadow-2xs flex items-center justify-between flex-wrap gap-2 animate-fadeIn">
+            <div className="flex items-center gap-2 text-xs text-amber-950">
+              <div className="w-6 h-6 rounded-lg bg-amber-500 text-white flex items-center justify-center shrink-0">
+                <Lock className="w-3.5 h-3.5" />
+              </div>
+              <span className="font-bold">
+                این گزارش قبلاً چاپ و نهایی شده و جهت جلوگیری از تغییر ناخواسته قفل است.
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              {reportRevisions.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setIsVersionHistoryModalOpen(true)}
+                  className="h-7 px-2.5 bg-white hover:bg-indigo-50 text-indigo-900 border border-indigo-200 rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                >
+                  <History className="w-3 h-3 text-indigo-600" />
+                  <span>نسخه‌های قبلی ({reportRevisions.length})</span>
+                </button>
+              )}
+              {onUnlockReportForAddendum && (
+                <button
+                  type="button"
+                  onClick={onUnlockReportForAddendum}
+                  className="h-7 px-3 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-[11px] font-bold shadow-2xs transition-colors cursor-pointer flex items-center gap-1"
+                >
+                  <Unlock className="w-3 h-3" />
+                  <span>باز کردن قفل جهت ثبت اصلاحیه (Addendum)</span>
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Main Grid: Studies on Left (9 cols), Fast Macro Drawer on Right (3 cols) */}
+      {/* Compact Floating Selection Formatting Toolbar (نوار ابزار شناور فشرده بالای متن انتخابی) */}
+      {floatingToolbarPos && (
+        <div
+          ref={floatingToolbarRef}
+          dir="rtl"
+          style={{
+            position: 'fixed',
+            top: `${floatingToolbarPos.top}px`,
+            left: `${floatingToolbarPos.left}px`,
+            right: 'auto',
+            zIndex: 90,
+          }}
+          onMouseEnter={() => {
+            isInteractingWithFloatingRef.current = true;
+          }}
+          onMouseLeave={() => {
+            isInteractingWithFloatingRef.current = false;
+          }}
+          className="bg-slate-900/95 backdrop-blur-md text-white px-2 py-1 rounded-xl shadow-2xl border border-slate-700/90 flex items-center gap-1 whitespace-nowrap max-w-[calc(100vw-24px)] overflow-x-auto no-scrollbar animate-scaleIn no-print"
+        >
+          {/* ۱. انتخاب قلم (Font Family - فشرده) */}
+          <select
+            value={floatingFontName}
+            onFocus={() => {
+              isInteractingWithFloatingRef.current = true;
+            }}
+            onBlur={() => {
+              isInteractingWithFloatingRef.current = false;
+            }}
+            onChange={(e) => {
+              const chosenFont = e.target.value;
+              setFloatingFontName(chosenFont);
+              executeFloatingFormat('fontName', chosenFont);
+            }}
+            title="انتخاب قلم متن انتخاب‌شده"
+            className="h-6 text-[11px] px-1.5 rounded-lg bg-slate-800 text-white border border-slate-600 focus:border-teal-400 focus:outline-none font-bold cursor-pointer"
+          >
+            <option value="Vazirmatn">وزیرمتن</option>
+            <option value="IRANSans">ایران‌سنس</option>
+            <option value="Shabnam">شبنم</option>
+            <option value="Samim">صمیم</option>
+            <option value="Sahel">ساحل</option>
+            <option value="Noto Sans Arabic">نوتو سنس</option>
+            <option value="B Nazanin">بی‌نازنین</option>
+            <option value="B Mitra">بی‌میترا</option>
+            <option value="B Lotus">بی‌لوتوس</option>
+            <option value="B Zar">بی‌زر</option>
+            <option value="Tahoma">تاهوما</option>
+            <option value="Arial">Arial</option>
+          </select>
+
+          {/* ۲. سایز قلم (Font Size - فقط عدد جهت کوچک شدن نوار) */}
+          <select
+            value={floatingFontSize}
+            onFocus={() => {
+              isInteractingWithFloatingRef.current = true;
+            }}
+            onBlur={() => {
+              isInteractingWithFloatingRef.current = false;
+            }}
+            onChange={(e) => {
+              const val = e.target.value;
+              setFloatingFontSize(val);
+              executeFloatingFormat('fontSize', val);
+            }}
+            title="سایز قلم متن انتخاب‌شده"
+            className="h-6 w-12 text-[11px] px-1 rounded-lg bg-slate-800 text-white border border-slate-600 focus:border-teal-400 focus:outline-none font-bold text-center cursor-pointer"
+          >
+            <option value="2">۱۲</option>
+            <option value="3">۱۴</option>
+            <option value="4">۱۶</option>
+            <option value="5">۱۸</option>
+            <option value="6">۲۰</option>
+          </select>
+
+          <div className="h-3.5 w-px bg-slate-700 mx-0.5" />
+
+          {/* ۳. درشت، کج، زیرخط */}
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => executeFloatingFormat('bold')}
+            className="w-6 h-6 rounded-lg hover:bg-slate-700 flex items-center justify-center cursor-pointer"
+            title="درشت (Bold)"
+          >
+            <Bold className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => executeFloatingFormat('italic')}
+            className="w-6 h-6 rounded-lg hover:bg-slate-700 flex items-center justify-center cursor-pointer"
+            title="کج (Italic)"
+          >
+            <Italic className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => executeFloatingFormat('underline')}
+            className="w-6 h-6 rounded-lg hover:bg-slate-700 flex items-center justify-center cursor-pointer"
+            title="زیرخط (Underline)"
+          >
+            <Underline className="w-3.5 h-3.5" />
+          </button>
+
+          <div className="h-3.5 w-px bg-slate-700 mx-0.5" />
+
+          {/* ۴. تراز متن و جاستیفای (فقط آیکون، بدون متن اضافه) */}
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => executeFloatingFormat('justifyRight')}
+            className="w-6 h-6 rounded-lg hover:bg-slate-700 flex items-center justify-center cursor-pointer"
+            title="راست‌چین (Align Right)"
+          >
+            <AlignRight className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => executeFloatingFormat('justifyCenter')}
+            className="w-6 h-6 rounded-lg hover:bg-slate-700 flex items-center justify-center cursor-pointer"
+            title="وسط‌چین (Align Center)"
+          >
+            <AlignCenter className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => executeFloatingFormat('justifyLeft')}
+            className="w-6 h-6 rounded-lg hover:bg-slate-700 flex items-center justify-center cursor-pointer"
+            title="چپ‌چین (Align Left)"
+          >
+            <AlignLeft className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => executeFloatingFormat('justifyFull')}
+            className="w-6 h-6 rounded-lg bg-teal-600/30 hover:bg-teal-600 text-teal-200 hover:text-white border border-teal-500/40 flex items-center justify-center cursor-pointer"
+            title="تراز دوطرفه / جاستیفای کامل خطوط (Justify)"
+          >
+            <AlignJustify className="w-3.5 h-3.5" />
+          </button>
+
+          <div className="h-3.5 w-px bg-slate-700 mx-0.5" />
+
+          {/* ۵. جهت متن (RTL / LTR) */}
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => applyFloatingDirection('rtl')}
+            className="h-6 px-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-[10px] font-bold border border-slate-600 cursor-pointer"
+            title="جهت متن: راست به چپ (فارسی - RTL)"
+          >
+            RTL
+          </button>
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => applyFloatingDirection('ltr')}
+            className="h-6 px-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-[10px] font-bold border border-slate-600 cursor-pointer"
+            title="جهت متن: چپ به راست (انگلیسی - LTR)"
+          >
+            LTR
+          </button>
+
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              executeFloatingFormat('removeFormat');
+            }}
+            className="w-6 h-6 rounded-lg hover:bg-rose-600/80 text-slate-300 hover:text-white flex items-center justify-center cursor-pointer"
+            title="پاک کردن فرمت متن"
+          >
+            <Eraser className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Main Grid: Supports Standard View (9+3), Zen Full-Width View (12), or Split-Screen Comparison View (7+5) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 2xl:gap-7">
+        {/* Split-Screen Prior Report Comparison Panel (Shown when isSplitComparisonOpen is true) */}
+        {isSplitComparisonOpen && (
+          <div className="lg:col-span-5 bg-white rounded-2xl border-2 border-indigo-200 shadow-md overflow-hidden flex flex-col max-h-[820px] animate-fadeIn">
+            <div className="p-3.5 bg-indigo-950 text-white flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <Columns className="w-4 h-4 text-indigo-300 shrink-0" />
+                <div className="min-w-0">
+                  <h4 className="text-xs font-black truncate">
+                    نمای دوبرگه: مقایسه با گزارش پیشین بیمار
+                  </h4>
+                  <p className="text-[10px] text-indigo-200 truncate">
+                    مشاهده همزمان سابقه قبلی و کپی مستقیم به بخش Comparison
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsSplitComparisonOpen(false)}
+                className="h-7 px-2 rounded-lg bg-white/10 hover:bg-rose-600 text-xs font-bold flex items-center gap-1 cursor-pointer"
+              >
+                <span>بستن</span>
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="p-3 bg-indigo-50/70 border-b border-indigo-100 space-y-2">
+              <label className="block text-[11px] font-bold text-indigo-950">
+                انتخاب گزارش قبلی از آرشیو جهت مقایسه:
+              </label>
+              <select
+                value={activePriorReport?.id || ''}
+                onChange={(e) => setSelectedPriorReportId(e.target.value)}
+                className="w-full text-xs p-2 rounded-xl border border-indigo-200 bg-white font-bold text-slate-800"
+              >
+                {patientPriorReports.map((rep) => (
+                  <option key={rep.id} value={rep.id}>
+                    {rep.patientInfo?.fullName || 'بیمار'} — تاریخ: {rep.patientInfo?.reportDate} —{' '}
+                    {rep.studies?.[0]?.titleAndTechnique?.slice(0, 38) || 'گزارش تصویربرداری'}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {activePriorReport ? (
+              <div className="p-4 overflow-y-auto space-y-3 flex-1 text-xs">
+                <div className="flex items-center justify-between bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                  <div>
+                    <span className="text-slate-500">بیمار: </span>
+                    <strong className="text-slate-900">{activePriorReport.patientInfo?.fullName}</strong>
+                    <span className="mx-2 text-slate-300">|</span>
+                    <span className="text-slate-500">تاریخ قبلی: </span>
+                    <strong className="font-mono text-indigo-800">
+                      {activePriorReport.patientInfo?.reportDate}
+                    </strong>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleCopyPriorToComparison(activePriorReport)}
+                    className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold text-[11px] flex items-center gap-1 cursor-pointer shadow-2xs"
+                  >
+                    <Copy className="w-3 h-3" />
+                    <span>+ درج در بخش Comparison فعلی</span>
+                  </button>
+                </div>
+
+                {activePriorReport.studies?.map((st, sIdx) => (
+                  <div
+                    key={st.id || sIdx}
+                    className="p-3.5 rounded-xl border border-slate-200 bg-white space-y-2"
+                  >
+                    <div className="font-black text-indigo-950 border-b border-slate-100 pb-1.5">
+                      {st.titleAndTechnique}
+                    </div>
+                    <div
+                      className="prose prose-slate max-w-none text-xs leading-relaxed text-slate-700"
+                      dangerouslySetInnerHTML={{ __html: st.findingsHtml }}
+                    />
+                    {st.impressionHtml && (
+                      <div className="p-2.5 rounded-lg bg-teal-50/70 border border-teal-200 text-teal-950 font-semibold">
+                        <div className="text-[11px] font-black mb-1">نتیجه‌گیری قبلی:</div>
+                        <div dangerouslySetInnerHTML={{ __html: st.impressionHtml }} />
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="p-6 text-center text-xs text-slate-500">
+                گزارشی در آرشیو یافت نشد.
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Studies List (Supports Multiple Imaging Procedures per Patient) */}
-        <div className="lg:col-span-9 space-y-6">
+        <div
+          className={`${
+            isSplitComparisonOpen
+              ? 'lg:col-span-7'
+              : zenMode
+              ? 'lg:col-span-12'
+              : 'lg:col-span-9'
+          } space-y-6 transition-all duration-200`}
+        >
           {studies.map((study, index) => {
             const isActive = study.id === activeStudyId;
             const sTheme = modalityThemes[study.modality] || modalityThemes.sonography;
@@ -1036,41 +1964,21 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                   isActive ? sTheme.activeCardRing : 'border-slate-200 hover:border-slate-300'
                 }`}
               >
-                {/* Study Header Strip Harmonized with Study Modality Color */}
-                <div className={`px-4 py-2.5 text-white flex items-center justify-between transition-colors duration-200 ${sTheme.studyHeaderBg}`}>
-                  <div className="flex items-center gap-2">
-                    <span className={`w-6 h-6 rounded-lg font-black text-xs flex items-center justify-center shadow-2xs ${sTheme.studyBadge}`}>
-                      {index + 1}
-                    </span>
-                    <h3 className="font-bold text-xs sm:text-sm">
-                      بررسی شماره {index + 1}: {modalityNames[study.modality]}
-                    </h3>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    {/* Modality Selector for this specific study (Uniform h-7) */}
-                    <select
-                      value={study.modality}
-                      onChange={(e) => onUpdateStudy(study.id, { modality: e.target.value as Modality })}
-                      className="h-7 text-xs px-2.5 rounded-lg bg-slate-800/90 border border-slate-700 text-slate-200 focus:outline-none focus:border-sky-400 transition-colors cursor-pointer"
-                    >
-                      <option value="sonography">سونوگرافی</option>
-                      <option value="mri">ام‌آر‌آی</option>
-                      <option value="ct">سی‌تی‌اسکن</option>
-                    </select>
-
-                    {/* Quick Template Picker for this study (Matched to Study Modality Color) */}
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onOpenTemplates(study.id);
-                      }}
-                      className={`h-7 text-xs px-2.5 font-semibold rounded-lg inline-flex items-center gap-1 transition-all duration-200 active:scale-95 cursor-pointer border ${sTheme.primaryBtn}`}
-                    >
-                      <Layers className="w-3 h-3" />
-                      <span>قالب آماده</span>
-                    </button>
+                {/* Study Header Strip Harmonized with Study Modality Color + Integrated Title & Protocol */}
+                <div
+                  className={`px-3.5 py-2.5 text-white transition-colors duration-200 space-y-1.5 ${sTheme.studyHeaderBg}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <span
+                        className={`w-5 h-5 rounded-md font-black text-[11px] flex items-center justify-center shadow-2xs shrink-0 ${sTheme.studyBadge}`}
+                      >
+                        {index + 1}
+                      </span>
+                      <span className="font-bold text-xs text-white">
+                        بررسی شماره {index + 1} ({modalityNames[study.modality]})
+                      </span>
+                    </label>
 
                     {/* Delete study button (only if more than 1 study exists) */}
                     {studies.length > 1 && (
@@ -1080,74 +1988,130 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                           e.stopPropagation();
                           onRemoveStudy(study.id);
                         }}
-                        className="h-7 w-7 flex items-center justify-center text-slate-400 hover:text-rose-400 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                        className="h-6 w-6 flex items-center justify-center text-slate-300 hover:text-rose-400 rounded-lg hover:bg-slate-800/80 transition-colors cursor-pointer shrink-0"
                         title="حذف این تصویربرداری"
                       >
-                        <Trash2 className="w-4 h-4" />
+                        <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     )}
-                  </div>
-                </div>
-
-                {/* Section 1: عنوان (شامل نوع تصویربرداری، پروتکل و اطلاعات تصویربرداری) - SINGLE UNIFIED BOX */}
-                <div className="p-4 sm:p-5 bg-slate-50/70 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                      <FileText className="w-4 h-4 text-teal-600" />
-                      <span>عنوان (شامل نوع تصویربرداری، پروتکل و اطلاعات تصویربرداری)</span>
-                    </label>
-                    <span className="text-[10px] text-slate-400">
-                      پشتیبانی از شورتکات با کلید Space (مثلاً .abd)
-                    </span>
                   </div>
 
                   <textarea
                     ref={(el) => {
                       titleRefs.current[study.id] = el;
                     }}
+                    readOnly={isReportLocked}
                     value={study.titleAndTechnique}
-                    onChange={(e) => onUpdateStudy(study.id, { titleAndTechnique: e.target.value })}
-                    onKeyDown={(e) => handleTitleKeyDown(e, study)}
+                    onChange={(e) => {
+                      if (isReportLocked) return;
+                      onUpdateStudy(study.id, { titleAndTechnique: e.target.value });
+                    }}
+                    onKeyDown={(e) => {
+                      if (isReportLocked) return;
+                      handleTitleKeyDown(e, study);
+                    }}
                     placeholder="عنوان دقیق تصویربرداری، پروتکل، سکانس‌ها و شرایط انجام را اینجا بنویسید..."
-                    rows={2}
+                    rows={
+                      (study.titleAndTechnique || '').length > 90 ||
+                      (study.titleAndTechnique || '').includes('\n')
+                        ? 2
+                        : 1
+                    }
                     style={{
                       fontFamily: headingFont,
-                      fontSize: headingFontSize,
+                      fontSize: `${Math.round((((parseInt(headingFontSize, 10) || 16) + 3) * editorZoom) / 100)}px`,
                     }}
-                    className="w-full font-bold p-3 rounded-xl border border-slate-300 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 bg-white leading-relaxed resize-y shadow-2xs high-visibility-editor"
+                    className={`study-header-protocol-input w-full font-bold px-3 py-1.5 rounded-xl border leading-relaxed resize-y focus:outline-none focus:ring-1 focus:ring-teal-400 placeholder:text-slate-400 transition-colors ${
+                      isReportLocked ? 'opacity-80 cursor-not-allowed' : ''
+                    }`}
                   />
                 </div>
 
-                {/* Section 2: یافته‌های تصویربرداری (Findings - The Core Rich Editor) */}
-                <div className="p-5 sm:p-6 min-h-[340px] bg-white relative">
-                  <div className="flex items-center justify-between mb-3 pb-2 border-b border-slate-100 flex-wrap gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className="w-2.5 h-2.5 rounded-full bg-teal-500" />
-                      <h4 className="text-sm font-black text-slate-900 tracking-tight">
-                        یافته‌های تصویربرداری (Findings)
+                {/* Section 2: یافته‌های تصویربرداری (طراحی تمیز، کم‌فاصله و نوار فوق‌باریک تراز کاغذ A4 در همان سطر) */}
+                <div className="px-4 pt-2 pb-4 min-h-[340px] bg-white relative">
+                  <div className="flex items-center justify-between mb-1.5 pb-1.5 border-b border-slate-100 flex-wrap gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-teal-500" />
+                      <h4 className="text-xs font-bold text-slate-600">
+                        یافته‌های تصویربرداری
                       </h4>
                     </div>
 
-                    <div className="flex items-center gap-2 flex-wrap">
+                    {/* Ultra-Slim Single-Line A4 Page Capacity Indicator + Optional Number Slots Button */}
+                    <div className="flex items-center gap-1.5 flex-wrap">
                       {numberSlotsEnabled && (
                         <button
                           type="button"
                           onClick={() => handleAutoWrapStudyNumbers(study)}
-                          className="text-[11px] bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 px-2.5 py-0.5 rounded-lg font-bold flex items-center gap-1 transition-colors cursor-pointer"
-                          title="استخراج خودکار اعداد این گزارش در کادرهای جایگذاری بالا تا هنگام تغییر عدد متن به هم نریزد"
+                          className="h-6 text-[10px] bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 px-2 rounded-md font-bold flex items-center gap-1 transition-colors cursor-pointer"
+                          title="استخراج خودکار اعداد این گزارش در کادرهای جایگذاری بالا"
                         >
                           <Hash className="w-3 h-3 text-sky-600" />
-                          <span>استخراج فیلدهای عددی این متن</span>
+                          <span>استخراج اعداد</span>
                         </button>
                       )}
-                      <span className="text-[10px] bg-amber-50 text-amber-800 border border-amber-200 px-2 py-0.5 rounded font-medium">
-                        کدهای سریع: <strong className="font-mono">.abd</strong> ، <strong className="font-mono">.nl</strong> ، <strong className="font-mono">.gb</strong> + کلید Space
-                      </span>
-                      {smartSuggestionsEnabled && isActive && (
-                        <span className="text-teal-600 font-semibold bg-teal-50 px-2 py-0.5 rounded border border-teal-200 text-[10px] flex items-center gap-1">
-                          <Sparkles className="w-2.5 h-2.5" /> پیشنهاد هوشمند فعال
+
+                      {/* Compact Single-Line A4 Page Meter (Proposal #6 - Minimal & Clean) */}
+                      <div
+                        className={`h-6 px-2 rounded-lg border inline-flex items-center gap-2 text-[10.5px] transition-colors ${
+                          a4PageMetrics.status === 'overflow'
+                            ? 'bg-rose-50 border-rose-200 text-rose-900'
+                            : a4PageMetrics.status === 'near-full'
+                            ? 'bg-amber-50 border-amber-200 text-amber-900'
+                            : 'bg-slate-50 border-slate-200/90 text-slate-600'
+                        }`}
+                        title="تراز هوشمند کاغذ چاپ A4 (بر اساس سربرگ، خطوط گزارش و کادر امضای پزشک)"
+                      >
+                        <span className="font-bold whitespace-nowrap">
+                          {a4PageMetrics.status === 'overflow'
+                            ? `${a4PageMetrics.totalPages} برگه A4 (+${a4PageMetrics.overflowLinesPage2} خط در برگه ${a4PageMetrics.totalPages})`
+                            : `صفحه ۱ A4 (${a4PageMetrics.remainingLinesPage1} خط مانده)`}
                         </span>
-                      )}
+
+                        <div className="w-16 h-1.5 rounded-full bg-slate-200 overflow-hidden shrink-0">
+                          <div
+                            style={{ width: `${a4PageMetrics.visualBarPercent}%` }}
+                            className={`h-full rounded-full transition-all duration-300 ${
+                              a4PageMetrics.status === 'overflow'
+                                ? 'bg-rose-500'
+                                : a4PageMetrics.status === 'near-full'
+                                ? 'bg-amber-500'
+                                : 'bg-teal-500'
+                            }`}
+                          />
+                        </div>
+
+                        <span className="font-mono font-bold text-[10px]">
+                          {a4PageMetrics.fillPercent}%
+                        </span>
+
+                        {(a4PageMetrics.fillPercent >= 88 || a4PageMetrics.status === 'overflow') &&
+                          defaultFontSize > 12 &&
+                          onChangeDefaultFontSize && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const targetSize = a4PageMetrics.fillPercent > 112 ? 12 : 13;
+                                onChangeDefaultFontSize(targetSize);
+                              }}
+                              className="h-4 px-1.5 rounded bg-slate-900 hover:bg-teal-700 text-white text-[9.5px] font-bold transition-colors cursor-pointer whitespace-nowrap"
+                              title="فشرده‌سازی خودکار سایز قلم چاپ جهت جا شدن در ۱ برگه A4"
+                            >
+                              جا دادن در ۱ صفحه
+                            </button>
+                          )}
+
+                        {defaultFontSize < 14 && onChangeDefaultFontSize && (
+                          <button
+                            type="button"
+                            onClick={() => onChangeDefaultFontSize(14)}
+                            className="h-4 px-1.5 rounded bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 text-[9.5px] font-bold transition-colors cursor-pointer whitespace-nowrap"
+                            title="بازگرداندن سایز قلم چاپ به ۱۴"
+                          >
+                            ↺ قلم ۱۴
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
 
@@ -1160,14 +2124,14 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                     if (slots.length === 0) return null;
 
                     return (
-                      <div className="mb-3.5 p-3 bg-sky-50/80 border border-sky-200 rounded-2xl space-y-2 shadow-2xs">
+                      <div className="mb-3 p-2.5 bg-sky-50/80 border border-sky-200 rounded-xl space-y-1.5 shadow-2xs">
                         <div className="flex items-center justify-between flex-wrap gap-1">
                           <div className="flex items-center gap-1.5 text-xs font-extrabold text-sky-950">
                             <SlidersHorizontal className="w-3.5 h-3.5 text-sky-600" />
-                            <span>جایگذاری سریع اعداد و اندازه‌های گزارش (بدون به هم خوردن متن):</span>
+                            <span>جایگذاری سریع اعداد و اندازه‌های گزارش:</span>
                           </div>
                           <span className="text-[10px] text-sky-700 font-medium">
-                            عدد را در کادر مربوطه بنویسید و با کلید Enter یا Tab به عدد بعدی بروید
+                            با کلید Enter یا Tab به عدد بعدی بروید
                           </span>
                         </div>
 
@@ -1224,7 +2188,7 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
 
                   {/* Live Floating Auto-Expander Hint Banner when typing `.xyz` */}
                   {isActive && pendingShortcutMatch && (
-                    <div className="mb-2 p-2.5 bg-amber-50 border border-amber-300 rounded-xl flex items-center justify-between text-xs text-amber-950 shadow-xs animate-fadeIn">
+                    <div className="mb-2 p-2 bg-amber-50 border border-amber-300 rounded-xl flex items-center justify-between text-xs text-amber-950 shadow-xs animate-fadeIn">
                       <div className="flex items-center gap-2 overflow-hidden">
                         <span className="px-2 py-0.5 bg-amber-500 text-white font-mono font-bold rounded text-xs shrink-0">
                           {pendingShortcutMatch.trigger}
@@ -1245,20 +2209,29 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                     ref={(el) => {
                       findingsRefs.current[study.id] = el;
                     }}
-                    contentEditable
+                    contentEditable={!isReportLocked}
                     dir={activeDirection}
                     onClick={(e) => handleEditorClick(e, study.id)}
                     onFocus={() => setActiveStudyId(study.id)}
-                    onInput={() => handleFindingsInput(study)}
-                    onKeyDown={(e) => handleFindingsKeyDown(e, study)}
-                    className="max-w-none min-h-[260px] p-2.5 focus:outline-none text-slate-800 leading-[2.05] selection:bg-teal-200 border-none high-visibility-editor"
+                    onInput={() => {
+                      if (isReportLocked) return;
+                      handleFindingsInput(study);
+                    }}
+                    onKeyDown={(e) => {
+                      if (isReportLocked) return;
+                      handleFindingsKeyDown(e, study);
+                    }}
+                    className={`max-w-none min-h-[260px] p-1.5 focus:outline-none text-slate-800 selection:bg-teal-200 border-none high-visibility-editor ${
+                      isReportLocked ? 'opacity-85 cursor-not-allowed' : ''
+                    }`}
                     style={{
                       fontFamily: `${defaultFont}, 'Vazirmatn', sans-serif`,
-                      fontSize: `${Math.round((((defaultFontSize || 14) + 3) * editorZoom) / 100)}px`,
+                      fontSize: `${Math.round((((defaultFontSize || 14) + 6) * editorZoom) / 100)}px`,
+                      lineHeight: editorLineHeight || 1.9,
                       direction: activeDirection,
                       textAlign: activeDirection === 'rtl' ? 'right' : 'left',
                     }}
-                    data-placeholder="یافته‌های این تصویربرداری را اینجا تایپ کنید یا کدهای اختصاری (.abd, .nl, .gb) را تایپ کرده و Space بزنید..."
+                    data-placeholder="یافته‌های این تصویربرداری را اینجا تایپ کنید..."
                   />
 
                   {/* Smart Next-Sentence Ghost Bar (for active study) */}
@@ -1383,7 +2356,10 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                               value={study.comparison}
                               onChange={(e) => onUpdateStudy(study.id, { comparison: e.target.value })}
                               placeholder="شرح بررسی پیشین و مقایسه تغییرات..."
-                              className="w-full text-xs px-3 py-2 rounded-xl border border-slate-200 focus:border-teal-500 bg-white high-visibility-editor"
+                              style={{
+                                fontSize: `${Math.round((((defaultFontSize || 14) + 4) * editorZoom) / 100)}px`,
+                              }}
+                              className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:border-teal-500 bg-white high-visibility-editor"
                             />
                           </div>
                         )}
@@ -1441,10 +2417,11 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                                   }
                                 }
                               }}
-                              className="max-w-none min-h-[90px] p-3 rounded-xl bg-slate-50/50 border border-slate-200 focus:border-teal-500 focus:outline-none text-slate-800 leading-loose shadow-inner high-visibility-editor"
+                              className="max-w-none min-h-[90px] p-3 rounded-xl bg-slate-50/50 border border-slate-200 focus:border-teal-500 focus:outline-none text-slate-800 shadow-inner high-visibility-editor"
                               style={{
                                 fontFamily: `${defaultFont}, 'Vazirmatn', sans-serif`,
-                                fontSize: `${Math.round((((defaultFontSize || 14) + 2) * editorZoom) / 100)}px`,
+                                fontSize: `${Math.round((((defaultFontSize || 14) + 5) * editorZoom) / 100)}px`,
+                                lineHeight: editorLineHeight || 1.9,
                                 direction: activeDirection,
                                 textAlign: activeDirection === 'rtl' ? 'right' : 'left',
                               }}
@@ -1490,10 +2467,11 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                                   }
                                 }
                               }}
-                              className="max-w-none min-h-[60px] p-2.5 rounded-lg bg-slate-50/50 border border-slate-200 focus:border-teal-500 focus:outline-none leading-loose high-visibility-editor"
+                              className="max-w-none min-h-[60px] p-2.5 rounded-lg bg-slate-50/50 border border-slate-200 focus:border-teal-500 focus:outline-none high-visibility-editor"
                               style={{
                                 fontFamily: `${defaultFont}, 'Vazirmatn', sans-serif`,
-                                fontSize: `${Math.round((((defaultFontSize || 14) + 1.5) * editorZoom) / 100)}px`,
+                                fontSize: `${Math.round((((defaultFontSize || 14) + 4.5) * editorZoom) / 100)}px`,
+                                lineHeight: editorLineHeight || 1.9,
                                 direction: activeDirection,
                                 textAlign: activeDirection === 'rtl' ? 'right' : 'left',
                               }}
@@ -1541,91 +2519,192 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
           </div>
         </div>
 
-        {/* Side Quick Actions & Fast Macro Sidebar (3 cols on desktop, sticky on large monitors) */}
-        <div
-          style={{
-            top: 'calc(var(--navbar-height, 102px) + var(--tabsbar-height, 44px) + var(--toolbar-height, 46px) + var(--quickbar-height, 96px) + 12px)',
-          }}
-          className="lg:col-span-3 lg:sticky lg:self-start space-y-4"
-        >
-          {/* Quick Shortcuts & Macro Bar */}
-          <div className="bg-white rounded-2xl p-4 border border-slate-200/90 shadow-2xs">
-            <div className="flex items-center justify-between pb-2.5 mb-2.5 border-b border-slate-100">
-              <div className="flex items-center gap-1.5">
-                <Zap className="w-4 h-4 text-amber-500" />
-                <h4 className="text-xs font-bold text-slate-900">جایگزینی آنی با کلید Space</h4>
+        {/* Side Quick Actions & Fast Macro Sidebar (3 cols on desktop, hidden in Zen Mode or Split Comparison Mode) */}
+        {!zenMode && !isSplitComparisonOpen && (
+          <div
+            style={{
+              top: 'calc(var(--navbar-height, 102px) + var(--tabsbar-height, 44px) + var(--quickbar-height, 96px) + 12px)',
+            }}
+            className="lg:col-span-3 lg:sticky lg:self-start space-y-4"
+          >
+            {/* Quick Shortcuts & Macro Bar */}
+            <div className="bg-white rounded-2xl p-4 border border-slate-200/90 shadow-2xs">
+              <div className="flex items-center justify-between pb-2.5 mb-2.5 border-b border-slate-100">
+                <div className="flex items-center gap-1.5">
+                  <Zap className="w-4 h-4 text-amber-500" />
+                  <h4 className="text-xs font-bold text-slate-900">جایگزینی آنی با کلید Space</h4>
+                </div>
+                <span className="text-[10px] bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded font-mono">
+                  کد + Space
+                </span>
               </div>
-              <span className="text-[10px] bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded font-mono">
-                کد + Space
-              </span>
-            </div>
 
-            <p className="text-[11px] text-slate-500 mb-2 leading-normal">
-              کد اختصاری را در متن تایپ کرده و کلید <strong>Space</strong> را بزنید (یا روی کارت کلیک کنید):
-            </p>
+              <p className="text-[11px] text-slate-500 mb-2 leading-normal">
+                کد اختصاری را در متن تایپ کرده و کلید <strong>Space</strong> را بزنید (یا کلید ترکیبی مثل{' '}
+                <strong>Alt+T</strong> را بفشارید):
+              </p>
 
-            {/* Category Filter Pills */}
-            <div className="flex items-center gap-1 mb-2.5">
-              <button
-                onClick={() => setQuickMacroFilter('all')}
-                className={`text-[10px] px-2 py-0.5 rounded-md font-medium transition-colors cursor-pointer ${
-                  quickMacroFilter === 'all'
-                    ? 'bg-slate-900 text-white'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                }`}
-              >
-                همه
-              </button>
-              <button
-                onClick={() => setQuickMacroFilter('normal')}
-                className={`text-[10px] px-2 py-0.5 rounded-md font-medium transition-colors cursor-pointer ${
-                  quickMacroFilter === 'normal'
-                    ? 'bg-emerald-700 text-white'
-                    : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
-                }`}
-              >
-                نرمال
-              </button>
-              <button
-                onClick={() => setQuickMacroFilter('pathology')}
-                className={`text-[10px] px-2 py-0.5 rounded-md font-medium transition-colors cursor-pointer ${
-                  quickMacroFilter === 'pathology'
-                    ? 'bg-rose-700 text-white'
-                    : 'bg-rose-50 text-rose-800 hover:bg-rose-100'
-                }`}
-              >
-                پاتولوژی
-              </button>
-            </div>
-
-            {/* Shortcut Cards List */}
-            <div className="space-y-1.5 max-h-[460px] 2xl:max-h-[calc(100vh-340px)] overflow-y-auto pr-0.5">
-              {filteredShortcuts.slice(0, 18).map((sc) => (
+              {/* Category Filter Pills */}
+              <div className="flex items-center gap-1 mb-2.5">
                 <button
-                  key={sc.id}
-                  onClick={() => insertShortcut(sc)}
-                  className="w-full text-right p-2 rounded-xl border border-slate-100 hover:border-teal-300 hover:bg-teal-50/60 transition-all group flex items-start justify-between gap-2 bg-slate-50/50 cursor-pointer"
+                  onClick={() => setQuickMacroFilter('all')}
+                  className={`text-[10px] px-2 py-0.5 rounded-md font-medium transition-colors cursor-pointer ${
+                    quickMacroFilter === 'all'
+                      ? 'bg-slate-900 text-white'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
                 >
-                  <div className="min-w-0 flex-1">
-                    <div className="text-xs font-bold text-slate-800 group-hover:text-teal-900 flex items-center gap-1.5">
-                      <span>{sc.label}</span>
-                    </div>
-                    <div className="text-[10px] text-slate-500 line-clamp-1 mt-0.5">
-                      {sc.expansion}
-                    </div>
-                  </div>
-                  <span
-                    dir="ltr"
-                    className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-amber-100/80 text-amber-900 border border-amber-300 shrink-0"
-                  >
-                    {sc.trigger}
-                  </span>
+                  همه
                 </button>
-              ))}
+                <button
+                  onClick={() => setQuickMacroFilter('normal')}
+                  className={`text-[10px] px-2 py-0.5 rounded-md font-medium transition-colors cursor-pointer ${
+                    quickMacroFilter === 'normal'
+                      ? 'bg-emerald-700 text-white'
+                      : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                  }`}
+                >
+                  نرمال
+                </button>
+                <button
+                  onClick={() => setQuickMacroFilter('pathology')}
+                  className={`text-[10px] px-2 py-0.5 rounded-md font-medium transition-colors cursor-pointer ${
+                    quickMacroFilter === 'pathology'
+                      ? 'bg-rose-700 text-white'
+                      : 'bg-rose-50 text-rose-800 hover:bg-rose-100'
+                  }`}
+                >
+                  پاتولوژی
+                </button>
+              </div>
+
+              {/* Shortcut Cards List */}
+              <div className="space-y-1.5 max-h-[460px] 2xl:max-h-[calc(100vh-340px)] overflow-y-auto pr-0.5">
+                {filteredShortcuts.slice(0, 18).map((sc) => (
+                  <button
+                    key={sc.id}
+                    onClick={() => insertShortcut(sc)}
+                    className="w-full text-right p-2 rounded-xl border border-slate-100 hover:border-teal-300 hover:bg-teal-50/60 transition-all group flex items-start justify-between gap-2 bg-slate-50/50 cursor-pointer"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-bold text-slate-800 group-hover:text-teal-900 flex items-center gap-1.5">
+                        <span>{sc.label}</span>
+                      </div>
+                      <div className="text-[10px] text-slate-500 line-clamp-1 mt-0.5">
+                        {sc.expansion}
+                      </div>
+                    </div>
+                    <div className="flex flex-col items-end gap-1 shrink-0">
+                      <span
+                        dir="ltr"
+                        className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-amber-100/80 text-amber-900 border border-amber-300"
+                      >
+                        {sc.trigger}
+                      </span>
+                      {sc.hotkey && (
+                        <span
+                          dir="ltr"
+                          className="text-[9px] font-mono font-bold px-1 py-0.2 rounded bg-indigo-50 text-indigo-800 border border-indigo-200"
+                        >
+                          {sc.hotkey}
+                        </span>
+                      )}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Proposal #12: Version History Inspection & Restore Modal */}
+      {isVersionHistoryModalOpen && (
+        <div className="fixed inset-0 z-[80] bg-slate-900/65 backdrop-blur-xs flex items-center justify-center p-4 no-print">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-2xl w-full max-h-[85vh] flex flex-col overflow-hidden animate-scaleIn">
+            <div className="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <History className="w-4 h-4 text-teal-400" />
+                <div>
+                  <h4 className="text-xs sm:text-sm font-black">
+                    تاریخچه نسخه‌ها و اصلاحیه‌های گزارش ({patientInfo.fullName || 'بیمار فعلی'})
+                  </h4>
+                  <p className="text-[11px] text-slate-300">
+                    مشاهده تمامی نسخه‌های ذخیره‌شده و چاپ‌شده قبلی با قابلیت بازگردانی فوری
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsVersionHistoryModalOpen(false)}
+                className="h-7 px-2.5 rounded-lg bg-slate-800 hover:bg-rose-600 text-xs font-bold flex items-center gap-1 cursor-pointer"
+              >
+                <span>بستن</span>
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="p-4 overflow-y-auto space-y-3 flex-1 bg-slate-50">
+              {reportRevisions.length === 0 ? (
+                <div className="p-6 text-center text-xs text-slate-500">
+                  هنوز تاریخچه‌ای برای این گزارش ثبت نشده است.
+                </div>
+              ) : (
+                reportRevisions
+                  .slice()
+                  .reverse()
+                  .map((rev, idx) => (
+                    <div
+                      key={rev.id || idx}
+                      className="bg-white rounded-xl border border-slate-200 p-3.5 space-y-2 shadow-2xs"
+                    >
+                      <div className="flex items-center justify-between flex-wrap gap-2 border-b border-slate-100 pb-2">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="px-2 py-0.5 rounded-md bg-indigo-600 text-white text-[11px] font-black">
+                            نسخه {rev.version}
+                          </span>
+                          <span className="text-xs font-bold text-slate-800">
+                            {rev.note || 'ثبت گزارش'}
+                          </span>
+                          <span className="text-[11px] text-slate-500 font-mono">
+                            ({rev.savedAtFa})
+                          </span>
+                          <span className="text-[11px] bg-sky-50 text-sky-800 border border-sky-200 px-2 py-0.5 rounded font-semibold">
+                            تایپیست: {rev.typistName}
+                          </span>
+                        </div>
+
+                        {onRestoreReportRevision && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onRestoreReportRevision(rev);
+                              setIsVersionHistoryModalOpen(false);
+                            }}
+                            className="px-3 py-1 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-[11px] font-bold cursor-pointer flex items-center gap-1 shadow-2xs"
+                          >
+                            <RotateCcw className="w-3 h-3" />
+                            <span>بازگردانی به این نسخه</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {rev.studies?.map((st, sIdx) => (
+                        <div key={st.id || sIdx} className="text-xs space-y-1">
+                          <div className="font-bold text-slate-800">{st.titleAndTechnique}</div>
+                          <div
+                            className="text-slate-600 leading-relaxed bg-slate-50 p-2.5 rounded-lg border border-slate-100"
+                            dangerouslySetInnerHTML={{ __html: st.findingsHtml }}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  ))
+              )}
             </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };
