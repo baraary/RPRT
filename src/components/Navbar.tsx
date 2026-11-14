@@ -10,6 +10,8 @@ import {
   Sun,
   BarChart3,
   UserCheck,
+  Monitor,
+  Minimize2,
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -27,6 +29,8 @@ interface NavbarProps {
   onToggleSmartSuggestions?: () => void;
   darkMode?: boolean;
   onToggleDarkMode?: () => void;
+  desktopMode?: boolean;
+  onToggleDesktopMode?: () => void;
   isOnline: boolean;
   onOpenDoctors: () => void;
   onOpenReports: () => void;
@@ -77,6 +81,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenTypistAnalytics,
   darkMode = false,
   onToggleDarkMode,
+  desktopMode = false,
+  onToggleDesktopMode,
   isOnline,
   onOpenDoctors,
   onOpenSettings,
@@ -206,8 +212,38 @@ export const Navbar: React.FC<NavbarProps> = ({
             })}
           </div>
 
-          {/* Left: Uniform Height (h-9) Controls: Settings Icon, Dark Mode, Online Status, Typist Selector, Doctor Selector */}
+          {/* Left: Uniform Height (h-9) Controls: Desktop Mode, Settings Icon, Dark Mode, Online Status, Typist Selector, Doctor Selector */}
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            {/* Native Desktop Mode Button (Uses Fullscreen + WakeLock Browser APIs & Floating Toolbars/Panels) */}
+            {onToggleDesktopMode && (
+              <button
+                type="button"
+                onClick={onToggleDesktopMode}
+                className={`h-9 px-2.5 rounded-xl inline-flex items-center justify-center gap-1.5 text-xs font-bold border whitespace-nowrap transition-all duration-200 active:scale-95 cursor-pointer ${
+                  desktopMode
+                    ? 'bg-teal-600 text-white border-teal-500 shadow-xs shadow-teal-600/25'
+                    : 'bg-slate-100 hover:bg-teal-50 border-slate-200 hover:border-teal-300 text-slate-700 hover:text-teal-900'
+                }`}
+                title={
+                  desktopMode
+                    ? 'خروج از حالت دسکتاپ (Esc یا Alt+D)'
+                    : 'حالت دسکتاپ (Native): تمام‌صفحه کردن مانیتور و شناورسازی نوار ابزارها و پنل‌های جانبی برای حداکثر فضای تایپ (Alt+D)'
+                }
+              >
+                {desktopMode ? (
+                  <>
+                    <Minimize2 className="w-3.5 h-3.5 shrink-0" />
+                    <span>خروج از حالت دسکتاپ</span>
+                  </>
+                ) : (
+                  <>
+                    <Monitor className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+                    <span>حالت دسکتاپ</span>
+                  </>
+                )}
+              </button>
+            )}
+
             {/* Settings Icon Button (Uniform h-9 right next to Dark Mode) */}
             <button
               type="button"

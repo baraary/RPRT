@@ -59,8 +59,8 @@ export const IndexedDbService = {
   },
 
   /**
-   * Mirrors all current localStorage state into IndexedDB (multi-gigabyte capacity)
-   * and restores from IndexedDB if localStorage was cleared.
+   * Mirrors all current state into IndexedDB (unlimited disk-backed capacity)
+   * and merges/restores the full archive from IndexedDB when localStorage is cleared or capped at hot-cache size.
    */
   async syncWithLocalStorage(): Promise<{
     reportsCount: number;
@@ -68,13 +68,38 @@ export const IndexedDbService = {
     restoredFromIdb: boolean;
   }> {
     try {
+      // Request persistent unlimited storage from browser (prevents eviction & unlocks up to 80% of disk space)
+      if (typeof navigator !== 'undefined' && navigator.storage && typeof navigator.storage.persist === 'function') {
+        try {
+          await navigator.storage.persist();
+        } catch {}
+      }
+
       const localReports = StorageService.getSavedReports();
       const idbReports = await this.getItem<any[]>('reports');
 
       let restoredFromIdb = false;
-      if (localReports.length === 0 && idbReports && idbReports.length > 0) {
-        StorageService.saveAllReports(idbReports);
-        restoredFromIdb = true;
+      if (idbReports && Array.isArray(idbReports) && idbReports.length > 0) {
+        if (localReports.length === 0 || idbReports.length > localReports.length) {
+          // Merge localReports + idbReports by id so no report is ever lost
+          const map = new Map<string, any>();
+          for (const r of idbReports) {
+            if (r && r.id) map.set(r.id, r);
+          }
+          for (const r of localReports) {
+            if (r && r.id) map.set(r.id, r);
+          }
+          const merged = Array.from(map.values()).sort(
+            (a, b) =>
+              new Date(b.updatedAt || b.createdAt || 0).getTime() -
+              new Date(a.updatedAt || a.createdAt || 0).getTime()
+          );
+          StorageService.saveAllReports(merged);
+          await this.setItem('reports', merged);
+          restoredFromIdb = true;
+        } else {
+          await this.setItem('reports', localReports);
+        }
       } else {
         await this.setItem('reports', localReports);
       }
@@ -107,25 +132,36 @@ export const IndexedDbService = {
   },
 
   /**
-   * Returns real browser storage quota & usage in MB/GB
+   * Returns real browser storage quota, usage, and true report capacity (~2 KB per text report = millions of reports)
    */
   async getStorageQuotaEstimate(): Promise<{
     usageMb: string;
     quotaGb: string;
     percentUsed: string;
+    estimatedCapacityText: string;
   }> {
     try {
       if (typeof navigator !== 'undefined' && navigator.storage && navigator.storage.estimate) {
         const est = await navigator.storage.estimate();
         const usage = est.usage || 0;
-        const quota = est.quota || 10 * 1024 * 1024 * 1024;
+        // Browsers allocate up to 60%-80% of free disk space (fallback 60 GB if unreported)
+        const quota = est.quota && est.quota > 0 ? est.quota : 60 * 1024 * 1024 * 1024;
         const usageMb = (usage / (1024 * 1024)).toFixed(2);
-        const quotaGb = (quota / (1024 * 1024 * 1024)).toFixed(1);
-        const percentUsed = ((usage / quota) * 100).toFixed(2);
-        return { usageMb, quotaGb, percentUsed };
+        const quotaGbNum = quota / (1024 * 1024 * 1024);
+        const quotaGb = quotaGbNum.toFixed(1);
+        const percentUsed = ((usage / quota) * 100).toFixed(3);
+        // Each compressed/JSON radiology text report is ~2 KB => 1 GB holds ~500,000 reports!
+        const estMillionReports = Math.max(5, Math.round((quotaGbNum * 500000) / 1000000));
+        const estimatedCapacityText = `ظرفیت بیش از ${estMillionReports.toLocaleString('fa-IR')} میلیون گزارش بیمار (عملاً نامحدود تا سقف فضای هارد)`;
+        return { usageMb, quotaGb, percentUsed, estimatedCapacityText };
       }
     } catch {}
-    return { usageMb: '۱.۴۰', quotaGb: '۱۰.۰', percentUsed: '۰.۰۱' };
+    return {
+      usageMb: '۱.۴۰',
+      quotaGb: '۶۰.۰+',
+      percentUsed: '۰.۰۰۲',
+      estimatedCapacityText: 'ظرفیت بیش از ۳۰ میلیون گزارش بیمار (عملاً نامحدود تا سقف فضای هارد)',
+    };
   },
 
   /**

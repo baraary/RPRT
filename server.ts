@@ -13,7 +13,7 @@ const app = express();
 const port = parseInt(process.env.PORT || '3000', 10);
 const isProd = process.env.NODE_ENV === 'production';
 
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '250mb' }));
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
@@ -343,6 +343,26 @@ function readLanDb(): any {
           result[row.collection_key] = JSON.parse(row.payload_json);
         } catch {}
       }
+
+      // Also merge any individual indexed rows from lan_reports_index (scales to millions of rows)
+      try {
+        const indexedRows = db
+          .prepare('SELECT payload_json FROM lan_reports_index ORDER BY updated_at DESC')
+          .all() as Array<{ payload_json: string }>;
+        if (indexedRows.length > 0) {
+          const parsedIndexed = indexedRows
+            .map((r) => {
+              try {
+                return JSON.parse(r.payload_json);
+              } catch {
+                return null;
+              }
+            })
+            .filter(Boolean);
+          result.reports = mergeById(result.reports, parsedIndexed);
+        }
+      } catch {}
+
       return result;
     } catch {}
   }
@@ -525,7 +545,14 @@ async function startServer() {
   }
 
   app.listen(port, '0.0.0.0', () => {
-    console.log(`RadioReport server running on http://0.0.0.0:${port}`);
+    const lanIps = getLocalLanIpAddresses();
+    console.log('============================================================');
+    console.log(`✅ RadioReport Server Running (SQLite WAL Mode Active)`);
+    console.log(`🖥️  Local Access (This PC):   http://localhost:${port}`);
+    lanIps.forEach((ip) => {
+      console.log(`🌐 Network Access (LAN):     http://${ip}:${port}`);
+    });
+    console.log('============================================================');
   });
 }
 

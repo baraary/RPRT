@@ -1,10 +1,10 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { Modality, MedicalShortcut, PatientInfo, ReportStudy, MedicalTemplate, MedicalReport, ReportRevision } from '../types';
+import { STANDARD_ORGAN_DEFINITIONS } from '../data/defaultShortcuts';
 import {
   Sparkles,
   Zap,
   CheckCircle,
-  FileText,
   Wand2,
   GitCompare,
   ShieldCheck,
@@ -13,15 +13,11 @@ import {
   Layers,
   ChevronDown,
   ChevronUp,
-  ChevronRight,
-  ChevronLeft,
-  LayoutGrid,
   SpellCheck,
   Check,
   X,
   Hash,
   SlidersHorizontal,
-  Pin,
   BookmarkPlus,
   Maximize2,
   Minimize2,
@@ -40,6 +36,7 @@ import {
   Unlock,
   History,
   RotateCcw,
+  Pencil,
 } from 'lucide-react';
 import { AiService } from '../services/aiService';
 import {
@@ -72,7 +69,7 @@ interface RichMedicalEditorProps {
   onRegisterActiveEditorRef?: (el: HTMLDivElement | null) => void;
   isOnline: boolean;
   onOpenTemplates: (targetStudyId: string) => void;
-  onOpenShortcuts: () => void;
+  onOpenShortcuts: (initialOrgan?: string) => void;
   headingFont?: string;
   headingFontSize?: string;
   defaultFont?: string;
@@ -82,19 +79,25 @@ interface RichMedicalEditorProps {
   editorZoom?: number;
   templates?: MedicalTemplate[];
   onApplyPinnedTemplate?: (template: MedicalTemplate, targetStudyId: string) => void;
-  onTogglePinTemplate?: (templateId: string) => void;
   onStartQuickSaveAsTemplate?: (studyId: string) => void;
   zenMode?: boolean;
   onToggleZenMode?: () => void;
   savedReports?: MedicalReport[];
   onExecCommand?: (command: string, value?: string) => void;
-  // Proposal #12: Printed Report Security Lock & Version History
   isReportLocked?: boolean;
   onUnlockReportForAddendum?: () => void;
   reportRevisions?: ReportRevision[];
   onRestoreReportRevision?: (revision: ReportRevision) => void;
   editorLineHeight?: number;
   printLineHeight?: number;
+}
+
+interface UnifiedOrganGroup {
+  organ: string;
+  matchKeywords: string[];
+  modalities: Modality[];
+  titleKeywords?: string[];
+  items: MedicalShortcut[];
 }
 
 export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
@@ -120,7 +123,6 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
   editorZoom = 100,
   templates = [],
   onApplyPinnedTemplate,
-  onTogglePinTemplate,
   onStartQuickSaveAsTemplate,
   zenMode = false,
   onToggleZenMode,
@@ -138,6 +140,7 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
   const [ghostSuggestion, setGhostSuggestion] = useState<string>('');
   const [generatingImpressionId, setGeneratingImpressionId] = useState<string | null>(null);
   const [quickMacroFilter, setQuickMacroFilter] = useState<'all' | 'normal' | 'pathology'>('all');
+  const [sidebarOrganFilter, setSidebarOrganFilter] = useState<string>('all');
   const [expandedMoreInfo, setExpandedMoreInfo] = useState<Record<string, boolean>>({});
   const [isVersionHistoryModalOpen, setIsVersionHistoryModalOpen] = useState(false);
 
@@ -168,6 +171,131 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
   const [activeSlotId, setActiveSlotId] = useState<string | null>(null);
   const slotInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
+  // Build Unified Organ Groups directly from `shortcuts` + `STANDARD_ORGAN_DEFINITIONS`
+  const unifiedOrganGroups = useMemo<UnifiedOrganGroup[]>(() => {
+    const groupsMap = new Map<string, UnifiedOrganGroup>();
+
+    STANDARD_ORGAN_DEFINITIONS.forEach((def) => {
+      groupsMap.set(def.organ, {
+        organ: def.organ,
+        matchKeywords: def.matchKeywords,
+        modalities: def.modalities,
+        titleKeywords: def.titleKeywords,
+        items: [],
+      });
+    });
+
+    shortcuts.forEach((sc) => {
+      if (sc.isAutocorrect || sc.targetTemplateId) return;
+      const orgName = sc.organ || 'عمومی';
+      if (orgName === 'عمومی') return;
+
+      if (!groupsMap.has(orgName)) {
+        groupsMap.set(orgName, {
+          organ: orgName,
+          matchKeywords: [orgName],
+          modalities: ['sonography', 'ct', 'mri'],
+          items: [],
+        });
+      }
+      groupsMap.get(orgName)!.items.push(sc);
+    });
+
+    return Array.from(groupsMap.values()).filter((g) => g.items.length > 0);
+  }, [shortcuts]);
+
+  // Organ Quick-Toggle Popover Menu state (`${studyId}:${organName}`)
+  const [openOrganMenuKey, setOpenOrganMenuKey] = useState<string | null>(null);
+  const organMenuContainerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!openOrganMenuKey) return;
+    const handleOutsideOrganClick = (e: MouseEvent) => {
+      if (organMenuContainerRef.current && !organMenuContainerRef.current.contains(e.target as Node)) {
+        setOpenOrganMenuKey(null);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideOrganClick);
+    return () => document.removeEventListener('mousedown', handleOutsideOrganClick);
+  }, [openOrganMenuKey]);
+
+  const buildOrganParagraphHtml = (organLabel: string, rawText: string) => {
+    const clean = rawText.trim();
+    if (clean.startsWith('<p')) return clean;
+    const prefixRegex = new RegExp(`^${organLabel}[^:]*:\\s*`);
+    const bodyOnly = clean.replace(prefixRegex, '');
+    return `<p><strong>${organLabel}:</strong> ${bodyOnly}</p>`;
+  };
+
+  const handleApplyOrganShortcut = (
+    study: ReportStudy,
+    organGroup: UnifiedOrganGroup,
+    sc: MedicalShortcut
+  ) => {
+    if (isReportLocked) return;
+    const currentHtml = stripSpellHighlights(study.findingsHtml || '');
+    const pRegex = /<p[^>]*>[\s\S]*?<\/p>/gi;
+    const matches = currentHtml.match(pRegex);
+    const targetParagraphHtml = buildOrganParagraphHtml(organGroup.organ, sc.expansion);
+
+    let replaced = false;
+    let updatedHtml = '';
+
+    const matchesOrganParagraph = (blockHtml: string) => {
+      const plain = blockHtml.replace(/<[^>]+>/g, '').trim();
+      const headSlice = plain.slice(0, 42);
+      return organGroup.matchKeywords.some(
+        (kw) =>
+          headSlice.startsWith(kw) ||
+          headSlice.includes(`${kw}:`) ||
+          headSlice.includes(`${kw} ها:`) ||
+          headSlice.includes(`${kw}‌ها:`) ||
+          new RegExp(`<strong[^>]*>[^<]*${kw}`, 'i').test(blockHtml)
+      );
+    };
+
+    if (matches && matches.length > 0) {
+      updatedHtml = currentHtml.replace(pRegex, (pBlock) => {
+        if (!replaced && matchesOrganParagraph(pBlock)) {
+          replaced = true;
+          return targetParagraphHtml;
+        }
+        return pBlock;
+      });
+      if (!replaced) {
+        updatedHtml = `${currentHtml}${targetParagraphHtml}`;
+      }
+    } else {
+      const lines = currentHtml
+        .split(/<br\s*\/?>|\n/i)
+        .map((l) => l.trim())
+        .filter(Boolean);
+      const updatedLines = lines.map((line) => {
+        if (!replaced && matchesOrganParagraph(line)) {
+          replaced = true;
+          return targetParagraphHtml;
+        }
+        return line.startsWith('<p') ? line : `<p>${line}</p>`;
+      });
+      if (!replaced) {
+        updatedLines.push(targetParagraphHtml);
+      }
+      updatedHtml = updatedLines.join('');
+    }
+
+    const el = findingsRefs.current[study.id];
+    if (el) {
+      el.innerHTML = updatedHtml;
+    }
+    onUpdateStudy(study.id, { findingsHtml: updatedHtml });
+    setOpenOrganMenuKey(null);
+    triggerStudyPulse(study.id);
+
+    if (onShowToast) {
+      onShowToast(`✓ وضعیت «${organGroup.organ}» به «${sc.label}» تغییر یافت.`);
+    }
+  };
+
   const toggleMoreInfo = (studyId: string) => {
     setExpandedMoreInfo((prev) => ({ ...prev, [studyId]: !prev[studyId] }));
   };
@@ -177,23 +305,32 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
   // Ref map for title textarea elements
   const titleRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
 
-  // Pinned templates horizontal scroll ref & multi-line wrap toggle (for hospital mice without horizontal scroll)
-  const pinsScrollRef = useRef<HTMLDivElement | null>(null);
-  const [isPinsMultiLineWrap, setIsPinsMultiLineWrap] = useState(false);
+  // Study card refs & soft modality pulse state for smooth visual feedback on template insertion / new study
+  const studyCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const [pulsingStudyId, setPulsingStudyId] = useState<string | null>(null);
+  const prevStudiesCountRef = useRef<number>(studies.length);
 
-  const handleWheelPinsScroll = (e: React.WheelEvent<HTMLDivElement>) => {
-    if (isPinsMultiLineWrap || !pinsScrollRef.current) return;
-    if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
-      e.preventDefault();
-      pinsScrollRef.current.scrollLeft -= e.deltaY * 1.3;
+  const triggerStudyPulse = useCallback((targetId: string) => {
+    setPulsingStudyId(targetId);
+    const cardEl = studyCardRefs.current[targetId];
+    if (cardEl) {
+      cardEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
-  };
+    setTimeout(() => {
+      setPulsingStudyId((prev) => (prev === targetId ? null : prev));
+    }, 980);
+  }, []);
 
-  const scrollPinsBy = (direction: 'right' | 'left') => {
-    if (!pinsScrollRef.current) return;
-    const offset = direction === 'right' ? 220 : -220;
-    pinsScrollRef.current.scrollBy({ left: offset, behavior: 'smooth' });
-  };
+  useEffect(() => {
+    if (studies.length > prevStudiesCountRef.current) {
+      const newestStudy = studies[studies.length - 1];
+      if (newestStudy) {
+        setActiveStudyId(newestStudy.id);
+        setTimeout(() => triggerStudyPulse(newestStudy.id), 60);
+      }
+    }
+    prevStudiesCountRef.current = studies.length;
+  }, [studies, triggerStudyPulse]);
 
   // Ensure activeStudyId points to an existing study
   useEffect(() => {
@@ -752,17 +889,11 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
   const activeStudy = studies.find((s) => s.id === activeStudyId) || studies[0];
   const currentModality: Modality = activeStudy?.modality || 'sonography';
 
-  // Pinned templates filtered ONLY for the currently selected modality
-  const pinnedTemplates = templates.filter(
-    (t) => t.isPinned && t.modality === currentModality
-  );
-
   // Global keyboard shortcuts:
-  // 1. F1..F8 for Pinned Templates of the current modality
-  // 2. Alt+F or F11 for Zen / Full Focus Typing Mode
-  // 3. Custom Keyboard Hotkeys defined in ShortcutsModal (e.g., Alt+T, Alt+M, Alt+G)
+  // 1. Alt+F or F11 for Zen / Full Focus Typing Mode
+  // 2. Custom Keyboard Hotkeys defined in ShortcutsModal (e.g., Alt+T, Alt+M, Alt+G)
   useEffect(() => {
-    const handlePinnedAndCustomKeyDown = (e: KeyboardEvent) => {
+    const handleCustomKeyDown = (e: KeyboardEvent) => {
       // Zen / Focus Mode: Alt+F or F11
       if (
         (e.altKey && (e.key === 'f' || e.key === 'F' || e.key === 'ب' || e.code === 'KeyF')) ||
@@ -771,17 +902,6 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
         if (onToggleZenMode) {
           e.preventDefault();
           onToggleZenMode();
-          return;
-        }
-      }
-
-      // F1..F8 Pinned Templates
-      if (/^F[1-8]$/.test(e.key) && !e.ctrlKey && !e.altKey && !e.metaKey) {
-        const idx = parseInt(e.key.slice(1), 10) - 1;
-        const targetPinned = pinnedTemplates[idx];
-        if (targetPinned && onApplyPinnedTemplate) {
-          e.preventDefault();
-          onApplyPinnedTemplate(targetPinned, activeStudyId || studies[0]?.id || '');
           return;
         }
       }
@@ -829,10 +949,9 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
         }
       }
     };
-    window.addEventListener('keydown', handlePinnedAndCustomKeyDown);
-    return () => window.removeEventListener('keydown', handlePinnedAndCustomKeyDown);
+    window.addEventListener('keydown', handleCustomKeyDown);
+    return () => window.removeEventListener('keydown', handleCustomKeyDown);
   }, [
-    pinnedTemplates,
     templates,
     onApplyPinnedTemplate,
     activeStudyId,
@@ -1006,28 +1125,68 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
     }
   };
 
-  // Match prior reports for the current patient (by nationalId or fullName)
+  // Normalize National ID (convert Persian/Arabic digits to standard 0-9 and strip spaces/dashes)
+  const normalizeNationalId = (raw?: string): string => {
+    if (!raw) return '';
+    return raw
+      .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+      .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+      .replace(/[\s\-_]/g, '')
+      .trim();
+  };
+
+  const normalizedCurrentNationalId = useMemo(
+    () => normalizeNationalId(patientInfo.nationalId),
+    [patientInfo.nationalId]
+  );
+
+  const cleanCurrentPatientName = useMemo(
+    () => (patientInfo.fullName || '').replace(/\s+/g, ' ').trim(),
+    [patientInfo.fullName]
+  );
+
+  // Match prior reports by National ID (primary) OR Name similarity (secondary, always showing National ID next to name)
   const patientPriorReports = useMemo(() => {
-    const cleanNid = (patientInfo.nationalId || '').trim();
-    const cleanName = (patientInfo.fullName || '').trim();
+    const hasNid = normalizedCurrentNationalId.length > 0;
+    const hasName = cleanCurrentPatientName.length >= 3;
+    if (!hasNid && !hasName) return [];
+
     const matched = savedReports.filter((r) => {
-      if (cleanNid && r.patientInfo?.nationalId?.trim() === cleanNid) return true;
-      if (cleanName.length >= 3 && r.patientInfo?.fullName?.trim() === cleanName) return true;
+      const repNid = normalizeNationalId(r.patientInfo?.nationalId);
+      const repName = (r.patientInfo?.fullName || '').replace(/\s+/g, ' ').trim();
+
+      if (hasNid && repNid.length > 0 && repNid === normalizedCurrentNationalId) {
+        return true;
+      }
+      if (
+        hasName &&
+        repName.length >= 3 &&
+        (repName === cleanCurrentPatientName ||
+          repName.includes(cleanCurrentPatientName) ||
+          cleanCurrentPatientName.includes(repName))
+      ) {
+        return true;
+      }
       return false;
     });
-    return matched.length > 0 ? matched : savedReports;
-  }, [savedReports, patientInfo.nationalId, patientInfo.fullName]);
 
-  const exactPatientPriorCount = useMemo(() => {
-    const cleanNid = (patientInfo.nationalId || '').trim();
-    const cleanName = (patientInfo.fullName || '').trim();
-    if (!cleanNid && cleanName.length < 3) return 0;
-    return savedReports.filter((r) => {
-      if (cleanNid && r.patientInfo?.nationalId?.trim() === cleanNid) return true;
-      if (cleanName.length >= 3 && r.patientInfo?.fullName?.trim() === cleanName) return true;
-      return false;
-    }).length;
-  }, [savedReports, patientInfo.nationalId, patientInfo.fullName]);
+    // Sort: 1) Exact National ID match first, 2) Prior admissions before current admission, 3) Newest date first
+    return matched.sort((a, b) => {
+      const aNidMatch =
+        hasNid && normalizeNationalId(a.patientInfo?.nationalId) === normalizedCurrentNationalId ? 1 : 0;
+      const bNidMatch =
+        hasNid && normalizeNationalId(b.patientInfo?.nationalId) === normalizedCurrentNationalId ? 1 : 0;
+      if (aNidMatch !== bNidMatch) return bNidMatch - aNidMatch;
+
+      const aIsCurrentAdm = a.patientInfo?.admissionNumber === patientInfo.admissionNumber ? 1 : 0;
+      const bIsCurrentAdm = b.patientInfo?.admissionNumber === patientInfo.admissionNumber ? 1 : 0;
+      if (aIsCurrentAdm !== bIsCurrentAdm) return aIsCurrentAdm - bIsCurrentAdm;
+
+      return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+    });
+  }, [savedReports, normalizedCurrentNationalId, cleanCurrentPatientName, patientInfo.admissionNumber]);
+
+  const exactPatientPriorCount = patientPriorReports.length;
 
   const activePriorReport = useMemo(() => {
     return (
@@ -1036,6 +1195,34 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
       null
     );
   }, [patientPriorReports, selectedPriorReportId]);
+
+  // Detect when #app-editor-quickbar reaches and docks flush against #app-patient-tabs-bar on scroll
+  const quickbarRef = useRef<HTMLDivElement | null>(null);
+  const [isQuickbarDocked, setIsQuickbarDocked] = useState(false);
+
+  useEffect(() => {
+    const handleScrollDockCheck = () => {
+      const quickEl = quickbarRef.current;
+      if (!quickEl) return;
+      const tabsEl = document.getElementById('app-patient-tabs-bar');
+      const navEl = document.getElementById('app-main-navbar');
+      const anchorBottom = tabsEl
+        ? tabsEl.getBoundingClientRect().bottom
+        : navEl
+        ? navEl.getBoundingClientRect().bottom
+        : 0;
+      const quickTop = quickEl.getBoundingClientRect().top;
+      setIsQuickbarDocked(window.scrollY > 15 && quickTop <= anchorBottom + 3);
+    };
+
+    handleScrollDockCheck();
+    window.addEventListener('scroll', handleScrollDockCheck, { passive: true });
+    window.addEventListener('resize', handleScrollDockCheck);
+    return () => {
+      window.removeEventListener('scroll', handleScrollDockCheck);
+      window.removeEventListener('resize', handleScrollDockCheck);
+    };
+  }, [zenMode]);
 
   const handleCopyPriorToComparison = (priorRep: MedicalReport) => {
     const targetStudy = studies.find((s) => s.id === activeStudyId) || studies[0];
@@ -1060,7 +1247,8 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
   const filteredShortcuts = shortcuts.filter((sc) => {
     const matchesModality = !sc.modality || sc.modality === 'all' || sc.modality === activeStudy?.modality;
     const matchesCat = quickMacroFilter === 'all' || sc.category === quickMacroFilter;
-    return matchesModality && matchesCat;
+    const matchesOrgan = sidebarOrganFilter === 'all' || (sc.organ || 'عمومی') === sidebarOrganFilter;
+    return matchesModality && matchesCat && matchesOrgan;
   });
 
   const modalityNames: Record<Modality, string> = {
@@ -1123,23 +1311,32 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
   return (
     <div className="w-full max-w-[1680px] 2xl:max-w-[1840px] mx-auto px-4 sm:px-6 lg:px-8 2xl:px-10 py-2 space-y-3">
       {/* 
-        STICKY TYPING TOOLS, SPELL/HALF-SPACE HIGHLIGHTER & SLIM MODALITY-COLORED PINNED TEMPLATES
-        Stays pinned cleanly below Navbar + EditorToolbar as the user scrolls down through the report!
+        STICKY TYPING TOOLS & TEMPLATES QUICKBAR
+        Docks flush onto the bottom of PatientTabsBar as the user scrolls down!
       */}
       <div
         id="app-editor-quickbar"
+        ref={quickbarRef}
         style={{
-          top: 'calc(var(--navbar-height, 102px) + var(--tabsbar-height, 44px))',
+          top: 'calc(var(--navbar-height, 102px) + var(--tabsbar-height, 44px) - 1px)',
         }}
-        className="w-full sticky z-20 bg-slate-100/95 backdrop-blur-md pt-0.5 pb-1 space-y-1 border-b border-slate-200/80 shadow-2xs no-print transition-all duration-200"
+        className={`w-full sticky z-28 pb-1 space-y-1.5 no-print ${
+          isQuickbarDocked ? 'pt-0' : 'pt-0.5'
+        }`}
       >
-        {/* Slim Height (h-7) Quick Access Bar harmonized with active Modality Color */}
-        <div className="bg-white rounded-xl px-2 py-1 border border-slate-200/90 shadow-2xs flex flex-wrap items-center justify-between gap-1.5">
+        {/* Slim Height Quick Access Bar: seamlessly fuses with PatientTabsBar (rounded-t-none) when docked on scroll */}
+        <div
+          className={`bg-white/95 backdrop-blur-md px-2.5 py-1.5 border flex flex-wrap items-center justify-between gap-1.5 transition-all duration-150 ${
+            isQuickbarDocked
+              ? 'rounded-b-2xl rounded-t-none border-t-0 border-slate-300 shadow-[0_10px_24px_-8px_rgba(15,23,42,0.16)]'
+              : 'rounded-2xl border-slate-200/90 shadow-2xs'
+          }`}
+        >
           <div className="flex items-center gap-1.5 flex-wrap">
             <button
               type="button"
               onClick={() => onOpenTemplates(activeStudyId)}
-              className={`h-7 px-2.5 rounded-lg inline-flex items-center justify-center gap-1.5 text-[11px] font-bold border whitespace-nowrap transition-all duration-200 active:scale-95 cursor-pointer ${activeTheme.primaryBtn}`}
+              className={`h-7 px-2.5 rounded-xl inline-flex items-center justify-center gap-1.5 text-[11px] font-bold border whitespace-nowrap transition-all duration-200 active:scale-95 cursor-pointer ${activeTheme.primaryBtn}`}
               title="مشاهده و درج قالب‌های آماده پزشکان برای این تصویربرداری"
             >
               <Layers className="w-3.5 h-3.5 shrink-0" />
@@ -1151,7 +1348,7 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
               <button
                 type="button"
                 onClick={() => onStartQuickSaveAsTemplate(activeStudyId || studies[0]?.id || '')}
-                className={`h-7 px-2.5 rounded-lg inline-flex items-center justify-center gap-1.5 text-[11px] font-bold border whitespace-nowrap transition-all duration-200 active:scale-95 cursor-pointer ${activeTheme.secondaryBtn}`}
+                className={`h-7 px-2.5 rounded-xl inline-flex items-center justify-center gap-1.5 text-[11px] font-bold border whitespace-nowrap transition-all duration-200 active:scale-95 cursor-pointer ${activeTheme.secondaryBtn}`}
                 title="ذخیره مستقیم متن تایپ‌شده فعلی به عنوان قالب آماده جدید (در یک مرحله)"
               >
                 <BookmarkPlus className="w-3.5 h-3.5 shrink-0" />
@@ -1161,12 +1358,12 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
 
             <button
               type="button"
-              onClick={onOpenShortcuts}
-              className="h-7 px-2.5 bg-white hover:bg-slate-100 text-slate-700 hover:text-slate-900 border border-slate-200 rounded-lg inline-flex items-center justify-center gap-1.5 text-[11px] font-bold whitespace-nowrap shadow-2xs transition-all duration-200 active:scale-95 cursor-pointer"
-              title="مدیریت کدهای شورتکات و جملات پرکاربرد (جایگزینی خودکار با کلید Space)"
+              onClick={() => onOpenShortcuts('all')}
+              className="h-7 px-2.5 bg-white hover:bg-teal-50 text-slate-700 hover:text-teal-900 border border-slate-200 hover:border-teal-300 rounded-xl inline-flex items-center justify-center gap-1.5 text-[11px] font-bold whitespace-nowrap shadow-2xs transition-all duration-200 active:scale-95 cursor-pointer"
+              title="مدیریت یکپارچه جملات اعضا، کدهای شورتکات (Space) و میانبرهای کیبورد"
             >
               <Zap className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-              <span>شورتکات‌ها و ماکروها (Space)</span>
+              <span>بانک جملات اعضا و شورتکات‌ها (Space)</span>
             </button>
 
             {/* Insert Smart Number / Measurement Slot Dropdown (Only when enabled in Settings) */}
@@ -1352,130 +1549,6 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
             </div>
           )}
         </div>
-
-        {/* 
-          PINNED TEMPLATES STRIP (Harmonized with Active Modality Color + Hospital Mouse Scroll & Multi-Line Wrap)
-        */}
-        {pinnedTemplates.length > 0 && (
-          <div
-            className={`rounded-xl px-2.5 py-1 border flex items-center justify-between gap-1.5 transition-colors duration-200 ${activeTheme.pinStripBg}`}
-          >
-            {/* Scroll Right Arrow Button (for Hospital Mice) */}
-            {!isPinsMultiLineWrap && pinnedTemplates.length > 3 && (
-              <button
-                type="button"
-                onClick={() => scrollPinsBy('right')}
-                title="اسکرول سنجاق‌ها به راست (با چرخ موس هم می‌توانید روی سنجاق‌ها اسکرول کنید)"
-                className="w-6 h-6 rounded-md bg-white/80 hover:bg-white text-slate-700 border border-slate-200/80 flex items-center justify-center shrink-0 cursor-pointer active:scale-95 transition-colors shadow-2xs"
-              >
-                <ChevronRight className="w-3.5 h-3.5" />
-              </button>
-            )}
-
-            <div
-              ref={pinsScrollRef}
-              onWheel={handleWheelPinsScroll}
-              className={`flex items-center gap-1 flex-1 py-0.5 ${
-                isPinsMultiLineWrap
-                  ? 'flex-wrap'
-                  : 'overflow-x-auto no-scrollbar scroll-smooth'
-              }`}
-            >
-              <span
-                className={`inline-flex items-center gap-1 text-[11px] font-bold ml-1 shrink-0 whitespace-nowrap ${activeTheme.pinLabel}`}
-              >
-                <Pin className="w-3 h-3 shrink-0" />
-                <span>سنجاق‌های {modalityNames[currentModality]}:</span>
-              </span>
-
-              {pinnedTemplates.map((tpl, idx) => (
-                <div
-                  key={tpl.id}
-                  className={`group h-6 inline-flex items-center rounded-md border text-[11px] font-bold transition-all duration-150 shrink-0 overflow-hidden ${activeTheme.pinChip}`}
-                >
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onApplyPinnedTemplate &&
-                      onApplyPinnedTemplate(tpl, activeStudyId || studies[0]?.id || '')
-                    }
-                    title={
-                      idx < 8
-                        ? `اعمال فوری قالب «${tpl.title}» (کلید میانبر: F${idx + 1})`
-                        : `اعمال فوری قالب «${tpl.title}»`
-                    }
-                    className="h-full inline-flex items-center gap-1 px-2 cursor-pointer whitespace-nowrap"
-                  >
-                    <span className={`w-1.5 h-1.5 rounded-full transition-colors ${activeTheme.pinDot}`} />
-                    <span>{tpl.title}</span>
-                    {idx < 8 && (
-                      <span className="text-[9px] font-mono opacity-65">F{idx + 1}</span>
-                    )}
-                  </button>
-
-                  {onTogglePinTemplate && (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onTogglePinTemplate(tpl.id);
-                      }}
-                      title="برداشتن سنجاق"
-                      className="h-full px-1 opacity-50 hover:opacity-100 hover:bg-rose-500 hover:text-white transition-all cursor-pointer flex items-center justify-center"
-                    >
-                      <X className="w-2.5 h-2.5" />
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-
-            <div className="flex items-center gap-1 shrink-0">
-              {/* Scroll Left Arrow Button (for Hospital Mice) */}
-              {!isPinsMultiLineWrap && pinnedTemplates.length > 3 && (
-                <button
-                  type="button"
-                  onClick={() => scrollPinsBy('left')}
-                  title="اسکرول سنجاق‌ها به چپ (با چرخ موس هم می‌توانید روی سنجاق‌ها اسکرول کنید)"
-                  className="w-6 h-6 rounded-md bg-white/80 hover:bg-white text-slate-700 border border-slate-200/80 flex items-center justify-center shrink-0 cursor-pointer active:scale-95 transition-colors shadow-2xs"
-                >
-                  <ChevronLeft className="w-3.5 h-3.5" />
-                </button>
-              )}
-
-              {/* Multi-Line Wrap Toggle Button */}
-              {pinnedTemplates.length > 3 && (
-                <button
-                  type="button"
-                  onClick={() => setIsPinsMultiLineWrap((prev) => !prev)}
-                  title={
-                    isPinsMultiLineWrap
-                      ? 'بازگشت به نمایش تک‌خطی سنجاق‌ها'
-                      : 'نمایش چندخطی همه سنجاق‌ها (بدون نیاز به اسکرول افقی)'
-                  }
-                  className={`h-6 px-1.5 rounded-md border text-[10px] font-bold inline-flex items-center gap-1 transition-colors cursor-pointer shrink-0 ${
-                    isPinsMultiLineWrap
-                      ? 'bg-teal-600 text-white border-teal-600 shadow-2xs'
-                      : 'bg-white/80 hover:bg-white text-slate-700 border-slate-200/80'
-                  }`}
-                >
-                  <LayoutGrid className="w-3 h-3" />
-                  <span className="hidden sm:inline">
-                    {isPinsMultiLineWrap ? 'تک‌خطی' : 'همه سنجاق‌ها'}
-                  </span>
-                </button>
-              )}
-
-              <button
-                type="button"
-                onClick={() => onOpenTemplates(activeStudyId)}
-                className={`text-[10px] font-bold px-2 py-0.5 rounded-md hover:bg-white/70 transition-colors cursor-pointer shrink-0 whitespace-nowrap ${activeTheme.pinLabel}`}
-              >
-                + مدیریت
-              </button>
-            </div>
-          </div>
-        )}
 
         {/* 
           INTERACTIVE HIGHLIGHTED SPELL & HALF-SPACE SUGGESTION PANEL
@@ -1859,7 +1932,7 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                     نمای دوبرگه: مقایسه با گزارش پیشین بیمار
                   </h4>
                   <p className="text-[10px] text-indigo-200 truncate">
-                    مشاهده همزمان سابقه قبلی و کپی مستقیم به بخش Comparison
+                    جستجوی هوشمند بر اساس کد ملی یا تشابه اسمی (همراه با نمایش کد ملی کنار نام بیمار)
                   </p>
                 </div>
               </div>
@@ -1873,71 +1946,133 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
               </button>
             </div>
 
-            <div className="p-3 bg-indigo-50/70 border-b border-indigo-100 space-y-2">
-              <label className="block text-[11px] font-bold text-indigo-950">
-                انتخاب گزارش قبلی از آرشیو جهت مقایسه:
-              </label>
-              <select
-                value={activePriorReport?.id || ''}
-                onChange={(e) => setSelectedPriorReportId(e.target.value)}
-                className="w-full text-xs p-2 rounded-xl border border-indigo-200 bg-white font-bold text-slate-800"
-              >
-                {patientPriorReports.map((rep) => (
-                  <option key={rep.id} value={rep.id}>
-                    {rep.patientInfo?.fullName || 'بیمار'} — تاریخ: {rep.patientInfo?.reportDate} —{' '}
-                    {rep.studies?.[0]?.titleAndTechnique?.slice(0, 38) || 'گزارش تصویربرداری'}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {activePriorReport ? (
-              <div className="p-4 overflow-y-auto space-y-3 flex-1 text-xs">
-                <div className="flex items-center justify-between bg-slate-50 p-2.5 rounded-xl border border-slate-200">
-                  <div>
-                    <span className="text-slate-500">بیمار: </span>
-                    <strong className="text-slate-900">{activePriorReport.patientInfo?.fullName}</strong>
-                    <span className="mx-2 text-slate-300">|</span>
-                    <span className="text-slate-500">تاریخ قبلی: </span>
-                    <strong className="font-mono text-indigo-800">
-                      {activePriorReport.patientInfo?.reportDate}
-                    </strong>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => handleCopyPriorToComparison(activePriorReport)}
-                    className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold text-[11px] flex items-center gap-1 cursor-pointer shadow-2xs"
-                  >
-                    <Copy className="w-3 h-3" />
-                    <span>+ درج در بخش Comparison فعلی</span>
-                  </button>
+            {!normalizedCurrentNationalId && cleanCurrentPatientName.length < 3 ? (
+              <div className="p-6 text-center space-y-2.5 flex-1 flex flex-col items-center justify-center bg-slate-50/60">
+                <div className="w-10 h-10 rounded-2xl bg-indigo-50 border border-indigo-200 text-indigo-600 flex items-center justify-center font-black text-sm">
+                  ID
                 </div>
-
-                {activePriorReport.studies?.map((st, sIdx) => (
-                  <div
-                    key={st.id || sIdx}
-                    className="p-3.5 rounded-xl border border-slate-200 bg-white space-y-2"
-                  >
-                    <div className="font-black text-indigo-950 border-b border-slate-100 pb-1.5">
-                      {st.titleAndTechnique}
-                    </div>
-                    <div
-                      className="prose prose-slate max-w-none text-xs leading-relaxed text-slate-700"
-                      dangerouslySetInnerHTML={{ __html: st.findingsHtml }}
-                    />
-                    {st.impressionHtml && (
-                      <div className="p-2.5 rounded-lg bg-teal-50/70 border border-teal-200 text-teal-950 font-semibold">
-                        <div className="text-[11px] font-black mb-1">نتیجه‌گیری قبلی:</div>
-                        <div dangerouslySetInnerHTML={{ __html: st.impressionHtml }} />
-                      </div>
-                    )}
-                  </div>
-                ))}
+                <p className="text-xs font-bold text-slate-800">
+                  کد ملی یا نام بیمار هنوز وارد نشده است
+                </p>
+                <p className="text-[11px] text-slate-500 leading-relaxed max-w-xs">
+                  لطفاً در کادر مشخصات بالا، <strong className="text-slate-700">کد ملی</strong> یا{' '}
+                  <strong className="text-slate-700">نام و نام خانوادگی بیمار</strong> را وارد کنید تا سوابق قبلی به همراه کد ملی آن‌ها نمایش داده شوند.
+                </p>
+              </div>
+            ) : patientPriorReports.length === 0 ? (
+              <div className="p-6 text-center space-y-2 flex-1 flex flex-col items-center justify-center bg-slate-50/60">
+                <p className="text-xs font-bold text-slate-800">
+                  سابقه‌ای برای این بیمار در آرشیو یافت نشد
+                </p>
+                <p className="text-[11px] text-slate-500 leading-relaxed max-w-xs">
+                  هیچ گزارش ذخیره‌شده قبلی با کد ملی{' '}
+                  {patientInfo.nationalId ? (
+                    <span className="font-mono text-indigo-700 font-bold" dir="ltr">
+                      {patientInfo.nationalId}
+                    </span>
+                  ) : (
+                    '---'
+                  )}{' '}
+                  یا نام «{patientInfo.fullName || '---'}» در آرشیو وجود ندارد.
+                </p>
               </div>
             ) : (
-              <div className="p-6 text-center text-xs text-slate-500">
-                گزارشی در آرشیو یافت نشد.
-              </div>
+              <>
+                <div className="p-3 bg-indigo-50/70 border-b border-indigo-100 space-y-2">
+                  <div className="flex items-center justify-between flex-wrap gap-1">
+                    <label className="block text-[11px] font-bold text-indigo-950">
+                      انتخاب از بین سوابق یافت‌شده ({patientPriorReports.length} مورد):
+                    </label>
+                    <span className="text-[10px] font-semibold text-indigo-700">
+                      نام بیمار + کد ملی در لیست زیر درج شده است
+                    </span>
+                  </div>
+                  <select
+                    value={activePriorReport?.id || ''}
+                    onChange={(e) => setSelectedPriorReportId(e.target.value)}
+                    className="w-full text-xs p-2 rounded-xl border border-indigo-200 bg-white font-bold text-slate-800"
+                  >
+                    {patientPriorReports.map((rep) => {
+                      const repNid = rep.patientInfo?.nationalId?.trim() || 'بدون کد ملی';
+                      const isExactNid =
+                        normalizedCurrentNationalId.length > 0 &&
+                        normalizeNationalId(rep.patientInfo?.nationalId) === normalizedCurrentNationalId;
+                      const matchBadge = isExactNid ? '✓ تطابق کد ملی' : 'تشابه اسمی';
+                      return (
+                        <option key={rep.id} value={rep.id}>
+                          {rep.patientInfo?.fullName || 'بیمار'} (کد ملی: {repNid}) [{matchBadge}] — تاریخ:{' '}
+                          {rep.patientInfo?.reportDate} —{' '}
+                          {rep.studies?.[0]?.titleAndTechnique?.slice(0, 32) || 'گزارش تصویربرداری'}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+
+                {activePriorReport && (
+                  <div className="p-4 overflow-y-auto space-y-3 flex-1 text-xs">
+                    <div className="flex items-center justify-between flex-wrap gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                      <div className="flex items-center flex-wrap gap-1.5">
+                        <span className="text-slate-500">بیمار:</span>
+                        <strong className="text-slate-900">
+                          {activePriorReport.patientInfo?.fullName || '---'}
+                        </strong>
+                        <span
+                          className="px-2 py-0.5 rounded-md bg-indigo-100 text-indigo-900 border border-indigo-200 font-mono text-[11px] font-bold"
+                          dir="ltr"
+                        >
+                          کد ملی: {activePriorReport.patientInfo?.nationalId?.trim() || 'ثبت نشده'}
+                        </span>
+                        {normalizedCurrentNationalId.length > 0 &&
+                        normalizeNationalId(activePriorReport.patientInfo?.nationalId) ===
+                          normalizedCurrentNationalId ? (
+                          <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[10px] font-bold">
+                            ✓ تطابق کد ملی
+                          </span>
+                        ) : (
+                          <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 text-[10px] font-bold">
+                            تشابه اسمی
+                          </span>
+                        )}
+                        <span className="mx-1 text-slate-300">|</span>
+                        <span className="text-slate-500">تاریخ:</span>
+                        <strong className="font-mono text-indigo-800">
+                          {activePriorReport.patientInfo?.reportDate}
+                        </strong>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleCopyPriorToComparison(activePriorReport)}
+                        className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold text-[11px] flex items-center gap-1 cursor-pointer shadow-2xs"
+                      >
+                        <Copy className="w-3 h-3" />
+                        <span>+ درج در بخش Comparison فعلی</span>
+                      </button>
+                    </div>
+
+                    {activePriorReport.studies?.map((st, sIdx) => (
+                      <div
+                        key={st.id || sIdx}
+                        className="p-3.5 rounded-xl border border-slate-200 bg-white space-y-2"
+                      >
+                        <div className="font-black text-indigo-950 border-b border-slate-100 pb-1.5">
+                          {st.titleAndTechnique}
+                        </div>
+                        <div
+                          className="prose prose-slate max-w-none text-xs leading-relaxed text-slate-700"
+                          dangerouslySetInnerHTML={{ __html: st.findingsHtml }}
+                        />
+                        {st.impressionHtml && (
+                          <div className="p-2.5 rounded-lg bg-teal-50/70 border border-teal-200 text-teal-950 font-semibold">
+                            <div className="text-[11px] font-black mb-1">نتیجه‌گیری قبلی:</div>
+                            <div dangerouslySetInnerHTML={{ __html: st.impressionHtml }} />
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}
@@ -1954,285 +2089,576 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
         >
           {studies.map((study, index) => {
             const isActive = study.id === activeStudyId;
+            const isPulsing = study.id === pulsingStudyId;
             const sTheme = modalityThemes[study.modality] || modalityThemes.sonography;
 
+            // Item 3: Compute A4 page boundary details for this specific study
+            const page1Slice = a4PageMetrics.pages[0]?.slices.find((sl) => sl.study.id === study.id);
+            const page2Slice = a4PageMetrics.pages[1]?.slices.find((sl) => sl.study.id === study.id);
+            const studyStartsOnPage2 = !page1Slice && Boolean(page2Slice);
+            const studySpansPage1And2 = Boolean(page1Slice && page2Slice);
+
+            const p1PlainLen = (page1Slice?.findingsHtmlSlice || '')
+              .replace(/<[^>]+>/g, '')
+              .trim().length;
+            const totalPlainLen = (study.findingsHtml || '')
+              .replace(/<[^>]+>/g, '')
+              .trim().length;
+            const intraStudyBreakPercent =
+              studySpansPage1And2 && totalPlainLen > 0
+                ? Math.min(92, Math.max(22, Math.round((p1PlainLen / totalPlainLen) * 100)))
+                : null;
+
+            const page2FirstSentence = studySpansPage1And2
+              ? (
+                  page2Slice?.findingsHtmlSlice ||
+                  (page2Slice?.showImpressionSlice ? study.impressionHtml : '') ||
+                  ''
+                )
+                  .replace(/<[^>]+>/g, ' ')
+                  .replace(/\s+/g, ' ')
+                  .trim()
+                  .slice(0, 95)
+              : '';
+
+            // Unified Organ Quick-Toggle Chips for this study (powered directly by `shortcuts`)
+            const plainFindings = (study.findingsHtml || '').replace(/<[^>]+>/g, ' ');
+            const titleText = study.titleAndTechnique || '';
+            const relevantOrgans = unifiedOrganGroups.filter((org) => {
+              const inText = org.matchKeywords.some((kw) => plainFindings.includes(kw));
+              if (inText) return true;
+              if (org.titleKeywords && org.titleKeywords.some((tk) => titleText.includes(tk))) {
+                return true;
+              }
+              if (org.titleKeywords && org.titleKeywords.length > 0) {
+                return false;
+              }
+              return org.modalities.includes(study.modality);
+            });
+
             return (
-              <div
-                key={study.id}
-                onClick={() => setActiveStudyId(study.id)}
-                className={`bg-white rounded-2xl shadow-xs border transition-all duration-200 overflow-hidden divide-y divide-slate-100 ${
-                  isActive ? sTheme.activeCardRing : 'border-slate-200 hover:border-slate-300'
-                }`}
-              >
-                {/* Study Header Strip Harmonized with Study Modality Color + Integrated Title & Protocol */}
-                <div
-                  className={`px-3.5 py-2.5 text-white transition-colors duration-200 space-y-1.5 ${sTheme.studyHeaderBg}`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <span
-                        className={`w-5 h-5 rounded-md font-black text-[11px] flex items-center justify-center shadow-2xs shrink-0 ${sTheme.studyBadge}`}
-                      >
-                        {index + 1}
-                      </span>
-                      <span className="font-bold text-xs text-white">
-                        بررسی شماره {index + 1} ({modalityNames[study.modality]})
-                      </span>
-                    </label>
-
-                    {/* Delete study button (only if more than 1 study exists) */}
-                    {studies.length > 1 && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onRemoveStudy(study.id);
-                        }}
-                        className="h-6 w-6 flex items-center justify-center text-slate-300 hover:text-rose-400 rounded-lg hover:bg-slate-800/80 transition-colors cursor-pointer shrink-0"
-                        title="حذف این تصویربرداری"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </div>
-
-                  <textarea
-                    ref={(el) => {
-                      titleRefs.current[study.id] = el;
-                    }}
-                    readOnly={isReportLocked}
-                    value={study.titleAndTechnique}
-                    onChange={(e) => {
-                      if (isReportLocked) return;
-                      onUpdateStudy(study.id, { titleAndTechnique: e.target.value });
-                    }}
-                    onKeyDown={(e) => {
-                      if (isReportLocked) return;
-                      handleTitleKeyDown(e, study);
-                    }}
-                    placeholder="عنوان دقیق تصویربرداری، پروتکل، سکانس‌ها و شرایط انجام را اینجا بنویسید..."
-                    rows={
-                      (study.titleAndTechnique || '').length > 90 ||
-                      (study.titleAndTechnique || '').includes('\n')
-                        ? 2
-                        : 1
-                    }
-                    style={{
-                      fontFamily: headingFont,
-                      fontSize: `${Math.round((((parseInt(headingFontSize, 10) || 16) + 3) * editorZoom) / 100)}px`,
-                    }}
-                    className={`study-header-protocol-input w-full font-bold px-3 py-1.5 rounded-xl border leading-relaxed resize-y focus:outline-none focus:ring-1 focus:ring-teal-400 placeholder:text-slate-400 transition-colors ${
-                      isReportLocked ? 'opacity-80 cursor-not-allowed' : ''
-                    }`}
-                  />
-                </div>
-
-                {/* Section 2: یافته‌های تصویربرداری (طراحی تمیز، کم‌فاصله و نوار فوق‌باریک تراز کاغذ A4 در همان سطر) */}
-                <div className="px-4 pt-2 pb-4 min-h-[340px] bg-white relative">
-                  <div className="flex items-center justify-between mb-1.5 pb-1.5 border-b border-slate-100 flex-wrap gap-2">
-                    <div className="flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-teal-500" />
-                      <h4 className="text-xs font-bold text-slate-600">
-                        یافته‌های تصویربرداری
-                      </h4>
-                    </div>
-
-                    {/* Ultra-Slim Single-Line A4 Page Capacity Indicator + Optional Number Slots Button */}
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      {numberSlotsEnabled && (
+              <React.Fragment key={study.id}>
+                {/* Item 3 (Part A): Live Inter-Study A4 Page-Break Divider when this study starts on Page 2 */}
+                {studyStartsOnPage2 && (
+                  <div className="my-3 flex items-center gap-3 select-none animate-fadeIn">
+                    <div className="flex-1 border-t-2 border-dashed border-rose-400/80" />
+                    <div className="px-3.5 py-1 rounded-full bg-rose-50 border border-rose-300 text-rose-900 text-[11px] font-black flex items-center gap-2 shadow-2xs">
+                      <span>✂ مرز پایان صفحه اول A4 — این تصویربرداری در صفحه ۲ چاپ می‌شود</span>
+                      {defaultFontSize > 12 && onChangeDefaultFontSize && (
                         <button
                           type="button"
-                          onClick={() => handleAutoWrapStudyNumbers(study)}
-                          className="h-6 text-[10px] bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 px-2 rounded-md font-bold flex items-center gap-1 transition-colors cursor-pointer"
-                          title="استخراج خودکار اعداد این گزارش در کادرهای جایگذاری بالا"
+                          onClick={() => onChangeDefaultFontSize(a4PageMetrics.fillPercent > 112 ? 12 : 13)}
+                          className="px-2 py-0.5 rounded-md bg-rose-700 hover:bg-rose-800 text-white text-[10px] font-bold transition-colors cursor-pointer"
                         >
-                          <Hash className="w-3 h-3 text-sky-600" />
-                          <span>استخراج اعداد</span>
+                          جا دادن در صفحه ۱
                         </button>
                       )}
+                    </div>
+                    <div className="flex-1 border-t-2 border-dashed border-rose-400/80" />
+                  </div>
+                )}
 
-                      {/* Compact Single-Line A4 Page Meter (Proposal #6 - Minimal & Clean) */}
-                      <div
-                        className={`h-6 px-2 rounded-lg border inline-flex items-center gap-2 text-[10.5px] transition-colors ${
-                          a4PageMetrics.status === 'overflow'
-                            ? 'bg-rose-50 border-rose-200 text-rose-900'
-                            : a4PageMetrics.status === 'near-full'
-                            ? 'bg-amber-50 border-amber-200 text-amber-900'
-                            : 'bg-slate-50 border-slate-200/90 text-slate-600'
-                        }`}
-                        title="تراز هوشمند کاغذ چاپ A4 (بر اساس سربرگ، خطوط گزارش و کادر امضای پزشک)"
-                      >
-                        <span className="font-bold whitespace-nowrap">
-                          {a4PageMetrics.status === 'overflow'
-                            ? `${a4PageMetrics.totalPages} برگه A4 (+${a4PageMetrics.overflowLinesPage2} خط در برگه ${a4PageMetrics.totalPages})`
-                            : `صفحه ۱ A4 (${a4PageMetrics.remainingLinesPage1} خط مانده)`}
+                <div
+                  ref={(el) => {
+                    studyCardRefs.current[study.id] = el;
+                  }}
+                  onClick={() => setActiveStudyId(study.id)}
+                  className={`medical-paper-sheet rounded-2xl border transition-all duration-300 overflow-hidden divide-y divide-slate-100 ${
+                    isActive ? sTheme.activeCardRing : 'border-slate-200/90 hover:border-slate-300'
+                  } ${isPulsing ? 'animate-modalityPulse' : ''}`}
+                >
+                  {/* Study Header Strip Harmonized with Study Modality Color + Integrated Title & Protocol */}
+                  <div
+                    className={`px-3.5 py-2.5 text-white transition-colors duration-200 space-y-1.5 ${sTheme.studyHeaderBg}`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <span
+                          className={`w-5 h-5 rounded-md font-black text-[11px] flex items-center justify-center shadow-2xs shrink-0 ${sTheme.studyBadge}`}
+                        >
+                          {index + 1}
                         </span>
-
-                        <div className="w-16 h-1.5 rounded-full bg-slate-200 overflow-hidden shrink-0">
-                          <div
-                            style={{ width: `${a4PageMetrics.visualBarPercent}%` }}
-                            className={`h-full rounded-full transition-all duration-300 ${
-                              a4PageMetrics.status === 'overflow'
-                                ? 'bg-rose-500'
-                                : a4PageMetrics.status === 'near-full'
-                                ? 'bg-amber-500'
-                                : 'bg-teal-500'
-                            }`}
-                          />
-                        </div>
-
-                        <span className="font-mono font-bold text-[10px]">
-                          {a4PageMetrics.fillPercent}%
+                        <span className="font-bold text-xs text-white">
+                          بررسی شماره {index + 1} ({modalityNames[study.modality]})
                         </span>
+                      </label>
 
-                        {(a4PageMetrics.fillPercent >= 88 || a4PageMetrics.status === 'overflow') &&
-                          defaultFontSize > 12 &&
-                          onChangeDefaultFontSize && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const targetSize = a4PageMetrics.fillPercent > 112 ? 12 : 13;
-                                onChangeDefaultFontSize(targetSize);
-                              }}
-                              className="h-4 px-1.5 rounded bg-slate-900 hover:bg-teal-700 text-white text-[9.5px] font-bold transition-colors cursor-pointer whitespace-nowrap"
-                              title="فشرده‌سازی خودکار سایز قلم چاپ جهت جا شدن در ۱ برگه A4"
-                            >
-                              جا دادن در ۱ صفحه
-                            </button>
-                          )}
+                      {/* Delete study button (only if more than 1 study exists) */}
+                      {studies.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onRemoveStudy(study.id);
+                          }}
+                          className="h-6 w-6 flex items-center justify-center text-slate-300 hover:text-rose-400 rounded-lg hover:bg-slate-800/80 transition-colors cursor-pointer shrink-0"
+                          title="حذف این تصویربرداری"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
 
-                        {defaultFontSize < 14 && onChangeDefaultFontSize && (
+                    <textarea
+                      ref={(el) => {
+                        titleRefs.current[study.id] = el;
+                      }}
+                      readOnly={isReportLocked}
+                      value={study.titleAndTechnique}
+                      onChange={(e) => {
+                        if (isReportLocked) return;
+                        onUpdateStudy(study.id, { titleAndTechnique: e.target.value });
+                      }}
+                      onKeyDown={(e) => {
+                        if (isReportLocked) return;
+                        handleTitleKeyDown(e, study);
+                      }}
+                      placeholder="عنوان دقیق تصویربرداری، پروتکل، سکانس‌ها و شرایط انجام را اینجا بنویسید..."
+                      rows={
+                        (study.titleAndTechnique || '').length > 90 ||
+                        (study.titleAndTechnique || '').includes('\n')
+                          ? 2
+                          : 1
+                      }
+                      style={{
+                        fontFamily: headingFont,
+                        fontSize: `${Math.round((((parseInt(headingFontSize, 10) || 16) + 3) * editorZoom) / 100)}px`,
+                      }}
+                      className={`study-header-protocol-input w-full font-bold px-3 py-1.5 rounded-xl border leading-relaxed resize-y focus:outline-none focus:ring-1 focus:ring-teal-400 placeholder:text-slate-400 transition-colors ${
+                        isReportLocked ? 'opacity-80 cursor-not-allowed' : ''
+                      }`}
+                    />
+                  </div>
+
+                  {/* Section 2: یافته‌های تصویربرداری (طراحی تمیز، کم‌فاصله و نوار فوق‌باریک تراز کاغذ A4 در همان سطر) */}
+                  <div className="px-4 pt-2 pb-4 min-h-[340px] bg-white relative">
+                    <div className="flex items-center justify-between mb-1.5 pb-1.5 border-b border-slate-100 flex-wrap gap-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-teal-500" />
+                        <h4 className="text-xs font-bold text-slate-600">
+                          یافته‌های تصویربرداری
+                        </h4>
+                      </div>
+
+                      {/* Ultra-Slim Single-Line A4 Page Capacity Indicator + Optional Number Slots Button */}
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {numberSlotsEnabled && (
                           <button
                             type="button"
-                            onClick={() => onChangeDefaultFontSize(14)}
-                            className="h-4 px-1.5 rounded bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 text-[9.5px] font-bold transition-colors cursor-pointer whitespace-nowrap"
-                            title="بازگرداندن سایز قلم چاپ به ۱۴"
+                            onClick={() => handleAutoWrapStudyNumbers(study)}
+                            className="h-6 text-[10px] bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 px-2 rounded-md font-bold flex items-center gap-1 transition-colors cursor-pointer"
+                            title="استخراج خودکار اعداد این گزارش در کادرهای جایگذاری بالا"
                           >
-                            ↺ قلم ۱۴
+                            <Hash className="w-3 h-3 text-sky-600" />
+                            <span>استخراج اعداد</span>
+                          </button>
+                        )}
+
+                        {/* Compact Single-Line A4 Page Meter (Proposal #6 - Minimal & Clean) */}
+                        <div
+                          className={`h-6 px-2 rounded-lg border inline-flex items-center gap-2 text-[10.5px] transition-colors ${
+                            a4PageMetrics.status === 'overflow'
+                              ? 'bg-rose-50 border-rose-200 text-rose-900'
+                              : a4PageMetrics.status === 'near-full'
+                              ? 'bg-amber-50 border-amber-200 text-amber-900'
+                              : 'bg-slate-50 border-slate-200/90 text-slate-600'
+                          }`}
+                          title="تراز هوشمند کاغذ چاپ A4 (بر اساس سربرگ، خطوط گزارش و کادر امضای پزشک)"
+                        >
+                          <span className="font-bold whitespace-nowrap">
+                            {a4PageMetrics.status === 'overflow'
+                              ? `${a4PageMetrics.totalPages} برگه A4 (+${a4PageMetrics.overflowLinesPage2} خط در برگه ${a4PageMetrics.totalPages})`
+                              : `صفحه ۱ A4 (${a4PageMetrics.remainingLinesPage1} خط مانده)`}
+                          </span>
+
+                          <div className="w-16 h-1.5 rounded-full bg-slate-200 overflow-hidden shrink-0">
+                            <div
+                              style={{ width: `${a4PageMetrics.visualBarPercent}%` }}
+                              className={`h-full rounded-full transition-all duration-500 ease-out ${
+                                a4PageMetrics.status === 'overflow'
+                                  ? 'bg-rose-500'
+                                  : a4PageMetrics.status === 'near-full'
+                                  ? 'bg-amber-500'
+                                  : 'bg-teal-500'
+                              }`}
+                            />
+                          </div>
+
+                          <span className="font-mono font-bold text-[10px]">
+                            {a4PageMetrics.fillPercent}%
+                          </span>
+
+                          {(a4PageMetrics.fillPercent >= 88 || a4PageMetrics.status === 'overflow') &&
+                            defaultFontSize > 12 &&
+                            onChangeDefaultFontSize && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const targetSize = a4PageMetrics.fillPercent > 112 ? 12 : 13;
+                                  onChangeDefaultFontSize(targetSize);
+                                }}
+                                className="h-4 px-1.5 rounded bg-slate-900 hover:bg-teal-700 text-white text-[9.5px] font-bold transition-colors cursor-pointer whitespace-nowrap"
+                                title="فشرده‌سازی خودکار سایز قلم چاپ جهت جا شدن در ۱ برگه A4"
+                              >
+                                جا دادن در ۱ صفحه
+                              </button>
+                            )}
+
+                          {defaultFontSize < 14 && onChangeDefaultFontSize && (
+                            <button
+                              type="button"
+                              onClick={() => onChangeDefaultFontSize(14)}
+                              className="h-4 px-1.5 rounded bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 text-[9.5px] font-bold transition-colors cursor-pointer whitespace-nowrap"
+                              title="بازگرداندن سایز قلم چاپ به ۱۴"
+                            >
+                              ↺ قلم ۱۴
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Unified Organ Quick-Toggle & Shortcuts Chips Strip (انتخابگر یکپارچه وضعیت اعضا و شورتکات‌ها) */}
+                    {!isReportLocked && relevantOrgans.length > 0 && (
+                      <div
+                        ref={isActive ? organMenuContainerRef : undefined}
+                        className="mb-2 py-1 px-2 bg-slate-50/90 border border-slate-200/80 rounded-xl flex items-center gap-1.5 flex-wrap no-print"
+                      >
+                        <span className="text-[10.5px] font-extrabold text-slate-500 ml-1 shrink-0 flex items-center gap-1">
+                          <Zap className="w-3 h-3 text-teal-600" />
+                          <span>وضعیت اعضا و شورتکات‌ها:</span>
+                        </span>
+
+                        {relevantOrgans.map((organGroup) => {
+                          const menuKey = `${study.id}:${organGroup.organ}`;
+                          const isMenuOpen = openOrganMenuKey === menuKey;
+
+                          const organRegex = new RegExp(
+                            `<p[^>]*>[\\s\\S]*?(?:${organGroup.matchKeywords.join('|')})[\\s\\S]*?<\\/p>`,
+                            'i'
+                          );
+                          const matchedBlock = (study.findingsHtml || '').match(organRegex)?.[0] || '';
+                          const matchedPlain = matchedBlock.replace(/<[^>]+>/g, '');
+                          const isPresent = Boolean(matchedBlock);
+                          const isPathologyInText =
+                            isPresent &&
+                            /(?:گرید|سنگ|کیست|توده|ندول|هایپرپلازی|اسپلنومگالی|هیدرونفروز|ضخامت|لیومیوم|فیبروم|پلی‌کیستیک|پولیپ|لجن|بالجینگ|هرنیاسیون|پروتروژن|تیروئیدیت|فیبروآدنوم|همانژیوم|مشاهده شد|مشهود است|رویت شد)/i.test(
+                              matchedPlain
+                            ) &&
+                            !/(?:ضایعه فضاگیر.*رویت نشد.*فاقد سنگ)/i.test(matchedPlain);
+
+                          return (
+                            <div key={organGroup.organ} className="relative">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveStudyId(study.id);
+                                  setOpenOrganMenuKey((prev) => (prev === menuKey ? null : menuKey));
+                                }}
+                                className={`h-6 px-2 rounded-lg text-[11px] font-bold inline-flex items-center gap-1 border transition-all cursor-pointer ${
+                                  isMenuOpen
+                                    ? 'bg-teal-600 text-white border-teal-600 shadow-xs'
+                                    : isPathologyInText
+                                    ? 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-300'
+                                    : isPresent
+                                    ? 'bg-emerald-50/70 hover:bg-emerald-100 text-emerald-900 border-emerald-200'
+                                    : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200/90'
+                                }`}
+                                title={`تغییر سریع وضعیت «${organGroup.organ}» یا مشاهده کدهای شورتکات آن`}
+                              >
+                                <span
+                                  className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                    isMenuOpen
+                                      ? 'bg-white'
+                                      : isPathologyInText
+                                      ? 'bg-amber-500'
+                                      : isPresent
+                                      ? 'bg-emerald-500'
+                                      : 'bg-slate-300'
+                                  }`}
+                                />
+                                <span>{organGroup.organ}</span>
+                                <ChevronDown
+                                  className={`w-3 h-3 transition-transform duration-150 ${
+                                    isMenuOpen ? 'rotate-180 text-white' : 'text-slate-400'
+                                  }`}
+                                />
+                              </button>
+
+                              {isMenuOpen && (
+                                <div
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="absolute right-0 top-full mt-1 w-80 bg-white border border-slate-200 rounded-2xl shadow-2xl p-2.5 z-50 text-xs space-y-1.5 animate-scaleIn"
+                                >
+                                  <div className="px-2 py-1 border-b border-slate-100 flex items-center justify-between">
+                                    <span className="font-black text-slate-800 text-[11px]">
+                                      وضعیت و شورتکات‌های «{organGroup.organ}»
+                                    </span>
+                                    <span className="text-[9.5px] text-slate-400">
+                                      {isPresent ? 'جایگزینی در متن' : 'افزودن به متن'}
+                                    </span>
+                                  </div>
+                                  <div className="space-y-1 max-h-60 overflow-y-auto pt-0.5">
+                                    {organGroup.items.map((sc) => {
+                                      const isNorm = sc.category === 'normal';
+                                      return (
+                                        <button
+                                          key={sc.id}
+                                          type="button"
+                                          onClick={() => handleApplyOrganShortcut(study, organGroup, sc)}
+                                          className={`w-full text-right px-2.5 py-1.5 rounded-xl font-bold text-[11px] flex items-center justify-between gap-2 border transition-colors cursor-pointer ${
+                                            isNorm
+                                              ? 'bg-emerald-50/70 hover:bg-emerald-600 text-emerald-900 hover:text-white border-emerald-200 hover:border-emerald-600'
+                                              : 'bg-slate-50 hover:bg-amber-500 text-slate-700 hover:text-white border-slate-200/80 hover:border-amber-500'
+                                          }`}
+                                        >
+                                          <span className="truncate">{sc.label}</span>
+                                          <div className="flex items-center gap-1 shrink-0">
+                                            {sc.trigger && (
+                                              <span
+                                                dir="ltr"
+                                                className="text-[9.5px] font-mono px-1.5 py-0.2 rounded bg-white/80 text-slate-700 border border-slate-200/70"
+                                              >
+                                                {sc.trigger}
+                                              </span>
+                                            )}
+                                            <span className="text-[9px] opacity-80">
+                                              {isNorm ? '✓ نرمال' : 'پاتولوژی'}
+                                            </span>
+                                          </div>
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                  <div className="pt-1.5 border-t border-slate-100">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setOpenOrganMenuKey(null);
+                                        onOpenShortcuts(organGroup.organ);
+                                      }}
+                                      className="w-full py-1.5 px-2.5 rounded-xl bg-teal-50/80 hover:bg-teal-600 text-teal-900 hover:text-white border border-teal-200/90 text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                                    >
+                                      <Pencil className="w-3 h-3" />
+                                      <span>ویرایش / افزودن جملات «{organGroup.organ}»</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenShortcuts(relevantOrgans[0]?.organ || 'all');
+                          }}
+                          className="mr-auto h-6 px-2 rounded-lg bg-white hover:bg-teal-50 text-teal-800 border border-teal-200/90 hover:border-teal-400 text-[10.5px] font-bold inline-flex items-center gap-1 transition-colors cursor-pointer shrink-0"
+                          title="مشاهده، ویرایش یا افزودن جملات اعضا و کدهای شورتکات در یک پنجره واحد"
+                        >
+                          <Pencil className="w-3 h-3 text-teal-600" />
+                          <span>مدیریت جملات و شورتکات‌ها</span>
+                        </button>
+                      </div>
+                    )}
+
+                    {/* 
+                      QUICK NUMBER & MEASUREMENT FILLER BAR (جایگذاری سریع اعداد بدون به هم ریختن متن)
+                      Only shown when numberSlotsEnabled is enabled in Settings!
+                    */}
+                    {numberSlotsEnabled && (() => {
+                      const { slots } = normalizeAndExtractSlots(study.findingsHtml);
+                      if (slots.length === 0) return null;
+
+                      return (
+                        <div className="mb-3 p-2.5 bg-sky-50/80 border border-sky-200 rounded-xl space-y-1.5 shadow-2xs">
+                          <div className="flex items-center justify-between flex-wrap gap-1">
+                            <div className="flex items-center gap-1.5 text-xs font-extrabold text-sky-950">
+                              <SlidersHorizontal className="w-3.5 h-3.5 text-sky-600" />
+                              <span>جایگذاری سریع اعداد و اندازه‌های گزارش:</span>
+                            </div>
+                            <span className="text-[10px] text-sky-700 font-medium">
+                              با کلید Enter یا Tab به عدد بعدی بروید
+                            </span>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                            {slots.map((slot, sIdx) => {
+                              const isSlotActive = activeSlotId === slot.id;
+                              return (
+                                <div
+                                  key={slot.id}
+                                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl border transition-all bg-white ${
+                                    isSlotActive
+                                      ? 'border-sky-600 ring-2 ring-sky-500/20 shadow-xs'
+                                      : 'border-sky-200 hover:border-sky-400'
+                                  }`}
+                                >
+                                  <label
+                                    htmlFor={`input-${slot.id}`}
+                                    className="text-[11px] font-bold text-slate-700 whitespace-nowrap cursor-pointer"
+                                  >
+                                    {slot.label}:
+                                  </label>
+                                  <input
+                                    id={`input-${slot.id}`}
+                                    ref={(el) => {
+                                      slotInputRefs.current[slot.id] = el;
+                                    }}
+                                    type="text"
+                                    dir="ltr"
+                                    value={slot.value}
+                                    onFocus={(e) => {
+                                      setActiveSlotId(slot.id);
+                                      e.currentTarget.select();
+                                    }}
+                                    onChange={(e) => handleUpdateSlotValue(study, slot.id, e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        const nextSlot = slots[sIdx + 1];
+                                        if (nextSlot && slotInputRefs.current[nextSlot.id]) {
+                                          slotInputRefs.current[nextSlot.id]?.focus();
+                                          slotInputRefs.current[nextSlot.id]?.select();
+                                        }
+                                      }
+                                    }}
+                                    className="w-24 text-xs font-mono font-extrabold text-sky-900 bg-sky-50/70 focus:bg-white px-2 py-0.5 rounded-lg border border-sky-200 focus:border-sky-500 text-center focus:outline-none"
+                                  />
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Live Floating Auto-Expander Hint Banner when typing `.xyz` */}
+                    {isActive && pendingShortcutMatch && (
+                      <div className="mb-2 p-2 bg-amber-50 border border-amber-300 rounded-xl flex items-center justify-between text-xs text-amber-950 shadow-xs animate-fadeIn">
+                        <div className="flex items-center gap-2 overflow-hidden">
+                          <span className="px-2 py-0.5 bg-amber-500 text-white font-mono font-bold rounded text-xs shrink-0">
+                            {pendingShortcutMatch.trigger}
+                          </span>
+                          <span className="font-bold shrink-0">{pendingShortcutMatch.label}:</span>
+                          <span className="text-slate-700 truncate italic">
+                            «{pendingShortcutMatch.expansion}»
+                          </span>
+                        </div>
+                        <span className="text-[10px] font-bold bg-white px-2 py-0.5 rounded border border-amber-300 text-amber-900 shrink-0 mr-2">
+                          کلید Space یا Tab را بزنید ↹
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Subtle Paper-on-Desk Radiology Emblem Watermark in Bottom-Left Corner */}
+                    <img
+                      src="/assets/aistudio/Layer-1_64c7d528.svg"
+                      alt=""
+                      aria-hidden="true"
+                      className="pointer-events-none select-none absolute bottom-4 left-5 w-28 h-28 object-contain opacity-[0.025]"
+                    />
+
+                    {/* ContentEditable Wrapper with Live A4 Page-Break Dashed Line Overlay (Item 3) */}
+                    <div className="relative">
+                      {intraStudyBreakPercent !== null && (
+                        <div
+                          style={{ top: `${intraStudyBreakPercent}%` }}
+                          className="pointer-events-none select-none absolute inset-x-0 z-20 flex items-center gap-2 -translate-y-1/2 no-print"
+                        >
+                          <div className="flex-1 border-t-2 border-dashed border-rose-500/75" />
+                          <span className="px-2.5 py-0.5 rounded-full bg-rose-600/95 text-white text-[10px] font-extrabold shadow-sm whitespace-nowrap">
+                            ✂ مرز پایان صفحه اول A4 • ادامه در صفحه ۲
+                          </span>
+                          <div className="flex-1 border-t-2 border-dashed border-rose-500/75" />
+                        </div>
+                      )}
+
+                      <div
+                        ref={(el) => {
+                          findingsRefs.current[study.id] = el;
+                        }}
+                        contentEditable={!isReportLocked}
+                        dir={activeDirection}
+                        onClick={(e) => handleEditorClick(e, study.id)}
+                        onFocus={() => setActiveStudyId(study.id)}
+                        onInput={() => {
+                          if (isReportLocked) return;
+                          handleFindingsInput(study);
+                        }}
+                        onKeyDown={(e) => {
+                          if (isReportLocked) return;
+                          handleFindingsKeyDown(e, study);
+                        }}
+                        className={`relative z-10 max-w-none min-h-[260px] p-2 focus:outline-none text-slate-800 selection:bg-teal-200 border-none high-visibility-editor ${
+                          isReportLocked ? 'opacity-85 cursor-not-allowed' : ''
+                        }`}
+                        style={{
+                          fontFamily: `${defaultFont}, 'Vazirmatn', sans-serif`,
+                          fontSize: `${Math.round((((defaultFontSize || 14) + 6) * editorZoom) / 100)}px`,
+                          lineHeight: editorLineHeight || 1.9,
+                          direction: activeDirection,
+                          textAlign: activeDirection === 'rtl' ? 'right' : 'left',
+                        }}
+                        data-placeholder="یافته‌های این تصویربرداری را اینجا تایپ کنید..."
+                      />
+                    </div>
+
+                    {/* Item 3 (Part B): Live A4 Page Boundary Callout / Bottom Guide inside the Study Card */}
+                    {studySpansPage1And2 ? (
+                      <div className="mt-2 px-3 py-1.5 rounded-xl bg-rose-50/90 border border-rose-200 flex items-center justify-between flex-wrap gap-2 text-[11px] text-rose-950 no-print animate-fadeIn">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="px-1.5 py-0.5 rounded bg-rose-600 text-white font-black text-[10px] shrink-0">
+                            ✂ صفحه ۲ A4
+                          </span>
+                          <span className="font-bold shrink-0">
+                            +{a4PageMetrics.overflowLinesPage2} سطر در صفحه دوم چاپ می‌شود
+                          </span>
+                          {page2FirstSentence && (
+                            <span className="text-rose-800/90 truncate italic">
+                              (شروع صفحه ۲ از: «{page2FirstSentence}...»)
+                            </span>
+                          )}
+                        </div>
+                        {defaultFontSize > 12 && onChangeDefaultFontSize && (
+                          <button
+                            type="button"
+                            onClick={() => onChangeDefaultFontSize(a4PageMetrics.fillPercent > 112 ? 12 : 13)}
+                            className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-teal-700 text-white font-bold text-[10px] transition-colors cursor-pointer shrink-0"
+                          >
+                            فشرده‌سازی خودکار در ۱ برگه A4
                           </button>
                         )}
                       </div>
-                    </div>
-                  </div>
-
-                  {/* 
-                    QUICK NUMBER & MEASUREMENT FILLER BAR (جایگذاری سریع اعداد بدون به هم ریختن متن)
-                    Only shown when numberSlotsEnabled is enabled in Settings!
-                  */}
-                  {numberSlotsEnabled && (() => {
-                    const { slots } = normalizeAndExtractSlots(study.findingsHtml);
-                    if (slots.length === 0) return null;
-
-                    return (
-                      <div className="mb-3 p-2.5 bg-sky-50/80 border border-sky-200 rounded-xl space-y-1.5 shadow-2xs">
-                        <div className="flex items-center justify-between flex-wrap gap-1">
-                          <div className="flex items-center gap-1.5 text-xs font-extrabold text-sky-950">
-                            <SlidersHorizontal className="w-3.5 h-3.5 text-sky-600" />
-                            <span>جایگذاری سریع اعداد و اندازه‌های گزارش:</span>
-                          </div>
-                          <span className="text-[10px] text-sky-700 font-medium">
-                            با کلید Enter یا Tab به عدد بعدی بروید
+                    ) : (
+                      index === studies.length - 1 &&
+                      a4PageMetrics.totalPages === 1 && (
+                        <div className="mt-2 pt-1 flex items-center gap-2 select-none opacity-75 hover:opacity-100 transition-opacity no-print">
+                          <div
+                            className={`flex-1 border-t border-dashed ${
+                              a4PageMetrics.status === 'near-full' ? 'border-amber-400' : 'border-slate-300'
+                            }`}
+                          />
+                          <span
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                              a4PageMetrics.status === 'near-full'
+                                ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                : 'bg-slate-50 text-slate-500 border-slate-200/80'
+                            }`}
+                          >
+                            --- ✂ خط مرز پایان صفحه اول A4 ({a4PageMetrics.remainingLinesPage1} سطر تا پایان برگه اول جا دارید) ---
                           </span>
+                          <div
+                            className={`flex-1 border-t border-dashed ${
+                              a4PageMetrics.status === 'near-full' ? 'border-amber-400' : 'border-slate-300'
+                            }`}
+                          />
                         </div>
-
-                        <div className="flex flex-wrap items-center gap-2 pt-0.5">
-                          {slots.map((slot, sIdx) => {
-                            const isSlotActive = activeSlotId === slot.id;
-                            return (
-                              <div
-                                key={slot.id}
-                                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl border transition-all bg-white ${
-                                  isSlotActive
-                                    ? 'border-sky-600 ring-2 ring-sky-500/20 shadow-xs'
-                                    : 'border-sky-200 hover:border-sky-400'
-                                }`}
-                              >
-                                <label
-                                  htmlFor={`input-${slot.id}`}
-                                  className="text-[11px] font-bold text-slate-700 whitespace-nowrap cursor-pointer"
-                                >
-                                  {slot.label}:
-                                </label>
-                                <input
-                                  id={`input-${slot.id}`}
-                                  ref={(el) => {
-                                    slotInputRefs.current[slot.id] = el;
-                                  }}
-                                  type="text"
-                                  dir="ltr"
-                                  value={slot.value}
-                                  onFocus={(e) => {
-                                    setActiveSlotId(slot.id);
-                                    e.currentTarget.select();
-                                  }}
-                                  onChange={(e) => handleUpdateSlotValue(study, slot.id, e.target.value)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
-                                      e.preventDefault();
-                                      const nextSlot = slots[sIdx + 1];
-                                      if (nextSlot && slotInputRefs.current[nextSlot.id]) {
-                                        slotInputRefs.current[nextSlot.id]?.focus();
-                                        slotInputRefs.current[nextSlot.id]?.select();
-                                      }
-                                    }
-                                  }}
-                                  className="w-24 text-xs font-mono font-extrabold text-sky-900 bg-sky-50/70 focus:bg-white px-2 py-0.5 rounded-lg border border-sky-200 focus:border-sky-500 text-center focus:outline-none"
-                                />
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    );
-                  })()}
-
-                  {/* Live Floating Auto-Expander Hint Banner when typing `.xyz` */}
-                  {isActive && pendingShortcutMatch && (
-                    <div className="mb-2 p-2 bg-amber-50 border border-amber-300 rounded-xl flex items-center justify-between text-xs text-amber-950 shadow-xs animate-fadeIn">
-                      <div className="flex items-center gap-2 overflow-hidden">
-                        <span className="px-2 py-0.5 bg-amber-500 text-white font-mono font-bold rounded text-xs shrink-0">
-                          {pendingShortcutMatch.trigger}
-                        </span>
-                        <span className="font-bold shrink-0">{pendingShortcutMatch.label}:</span>
-                        <span className="text-slate-700 truncate italic">
-                          «{pendingShortcutMatch.expansion}»
-                        </span>
-                      </div>
-                      <span className="text-[10px] font-bold bg-white px-2 py-0.5 rounded border border-amber-300 text-amber-900 shrink-0 mr-2">
-                        کلید Space یا Tab را بزنید ↹
-                      </span>
-                    </div>
-                  )}
-
-                  {/* ContentEditable Area */}
-                  <div
-                    ref={(el) => {
-                      findingsRefs.current[study.id] = el;
-                    }}
-                    contentEditable={!isReportLocked}
-                    dir={activeDirection}
-                    onClick={(e) => handleEditorClick(e, study.id)}
-                    onFocus={() => setActiveStudyId(study.id)}
-                    onInput={() => {
-                      if (isReportLocked) return;
-                      handleFindingsInput(study);
-                    }}
-                    onKeyDown={(e) => {
-                      if (isReportLocked) return;
-                      handleFindingsKeyDown(e, study);
-                    }}
-                    className={`max-w-none min-h-[260px] p-1.5 focus:outline-none text-slate-800 selection:bg-teal-200 border-none high-visibility-editor ${
-                      isReportLocked ? 'opacity-85 cursor-not-allowed' : ''
-                    }`}
-                    style={{
-                      fontFamily: `${defaultFont}, 'Vazirmatn', sans-serif`,
-                      fontSize: `${Math.round((((defaultFontSize || 14) + 6) * editorZoom) / 100)}px`,
-                      lineHeight: editorLineHeight || 1.9,
-                      direction: activeDirection,
-                      textAlign: activeDirection === 'rtl' ? 'right' : 'left',
-                    }}
-                    data-placeholder="یافته‌های این تصویربرداری را اینجا تایپ کنید..."
-                  />
+                      )
+                    )}
 
                   {/* Smart Next-Sentence Ghost Bar (for active study) */}
                   {smartSuggestionsEnabled && isActive && ghostSuggestion && (
@@ -2294,11 +2720,11 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                     className="w-full h-7 px-3 flex items-center justify-between text-right hover:bg-slate-100 transition-colors duration-150 cursor-pointer group"
                   >
                     <div className="flex items-center gap-1.5 min-w-0">
-                      {expandedMoreInfo[study.id] ? (
-                        <ChevronUp className="w-3.5 h-3.5 text-slate-500 group-hover:text-slate-800 shrink-0" />
-                      ) : (
-                        <ChevronDown className="w-3.5 h-3.5 text-slate-500 group-hover:text-slate-800 shrink-0" />
-                      )}
+                      <ChevronUp
+                        className={`w-3.5 h-3.5 text-slate-500 group-hover:text-slate-800 shrink-0 transition-transform duration-300 ${
+                          expandedMoreInfo[study.id] ? 'rotate-0' : 'rotate-180'
+                        }`}
+                      />
                       <span className="text-[11px] font-bold text-slate-600 group-hover:text-slate-900 truncate">
                         اطلاعات بیشتر و بخش‌های تکمیلی (مقایسه، نتیجه‌گیری، توصیه‌ها)
                       </span>
@@ -2326,8 +2752,15 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                     </div>
                   </button>
 
-                  {expandedMoreInfo[study.id] && (
-                    <div className="p-4 sm:p-5 bg-white border-t border-slate-200/80 divide-y divide-slate-100 space-y-3 animate-fadeIn">
+                  <div
+                    className={`smooth-accordion-wrapper ${
+                      expandedMoreInfo[study.id]
+                        ? 'smooth-accordion-open'
+                        : 'smooth-accordion-closed'
+                    }`}
+                  >
+                    <div className="smooth-accordion-inner">
+                      <div className="p-4 sm:p-5 bg-white border-t border-slate-200/80 divide-y divide-slate-100 space-y-3">
                       {/* 1. مقایسه با تصاویر پیشین */}
                       <div className="pb-3 space-y-2">
                         <div className="flex items-center justify-between">
@@ -2479,10 +2912,12 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                           </div>
                         )}
                       </div>
+                      </div>
                     </div>
-                  )}
+                  </div>
                 </div>
               </div>
+              </React.Fragment>
             );
           })}
 
@@ -2519,99 +2954,139 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
           </div>
         </div>
 
-        {/* Side Quick Actions & Fast Macro Sidebar (3 cols on desktop, hidden in Zen Mode or Split Comparison Mode) */}
+        {/* Side Quick Actions & Unified Organ Sentences / Shortcuts Sidebar (3 cols on desktop) */}
         {!zenMode && !isSplitComparisonOpen && (
           <div
             style={{
-              top: 'calc(var(--navbar-height, 102px) + var(--tabsbar-height, 44px) + var(--quickbar-height, 96px) + 12px)',
+              top: 'calc(var(--navbar-height, 102px) + var(--tabsbar-height, 44px) + var(--quickbar-height, 56px) + 12px)',
             }}
             className="lg:col-span-3 lg:sticky lg:self-start space-y-4"
           >
-            {/* Quick Shortcuts & Macro Bar */}
-            <div className="bg-white rounded-2xl p-4 border border-slate-200/90 shadow-2xs">
-              <div className="flex items-center justify-between pb-2.5 mb-2.5 border-b border-slate-100">
+            <div className="bg-white rounded-2xl p-3.5 border border-slate-200/90 shadow-2xs">
+              <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100">
                 <div className="flex items-center gap-1.5">
                   <Zap className="w-4 h-4 text-amber-500" />
-                  <h4 className="text-xs font-bold text-slate-900">جایگزینی آنی با کلید Space</h4>
+                  <h4 className="text-xs font-bold text-slate-900">جملات اعضا و شورتکات‌ها</h4>
                 </div>
-                <span className="text-[10px] bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded font-mono">
-                  کد + Space
-                </span>
+                <button
+                  type="button"
+                  onClick={() => onOpenShortcuts(sidebarOrganFilter)}
+                  className="text-[10.5px] font-bold bg-teal-50 hover:bg-teal-600 text-teal-800 hover:text-white border border-teal-200 px-2 py-0.5 rounded-lg transition-colors cursor-pointer flex items-center gap-1"
+                  title="ویرایش یا افزودن جمله آماده و شورتکات"
+                >
+                  <Pencil className="w-2.5 h-2.5" />
+                  <span>ویرایش</span>
+                </button>
               </div>
 
               <p className="text-[11px] text-slate-500 mb-2 leading-normal">
-                کد اختصاری را در متن تایپ کرده و کلید <strong>Space</strong> را بزنید (یا کلید ترکیبی مثل{' '}
-                <strong>Alt+T</strong> را بفشارید):
+                با کلیک روی هر مورد، جمله در گزارش درج می‌شود؛ یا کد آن را تایپ کرده و <strong>Space</strong> بزنید:
               </p>
 
-              {/* Category Filter Pills */}
-              <div className="flex items-center gap-1 mb-2.5">
-                <button
-                  onClick={() => setQuickMacroFilter('all')}
-                  className={`text-[10px] px-2 py-0.5 rounded-md font-medium transition-colors cursor-pointer ${
-                    quickMacroFilter === 'all'
-                      ? 'bg-slate-900 text-white'
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                  }`}
+              {/* Organ Filter Dropdown + Category Filter Pills */}
+              <div className="space-y-1.5 mb-2.5">
+                <select
+                  value={sidebarOrganFilter}
+                  onChange={(e) => setSidebarOrganFilter(e.target.value)}
+                  className="w-full text-[11px] px-2.5 py-1.5 rounded-xl border border-slate-200 bg-slate-50 font-bold text-slate-700 focus:border-teal-500 focus:outline-none"
                 >
-                  همه
-                </button>
-                <button
-                  onClick={() => setQuickMacroFilter('normal')}
-                  className={`text-[10px] px-2 py-0.5 rounded-md font-medium transition-colors cursor-pointer ${
-                    quickMacroFilter === 'normal'
-                      ? 'bg-emerald-700 text-white'
-                      : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
-                  }`}
-                >
-                  نرمال
-                </button>
-                <button
-                  onClick={() => setQuickMacroFilter('pathology')}
-                  className={`text-[10px] px-2 py-0.5 rounded-md font-medium transition-colors cursor-pointer ${
-                    quickMacroFilter === 'pathology'
-                      ? 'bg-rose-700 text-white'
-                      : 'bg-rose-50 text-rose-800 hover:bg-rose-100'
-                  }`}
-                >
-                  پاتولوژی
-                </button>
+                  <option value="all">همه اعضا و بخش‌ها</option>
+                  {unifiedOrganGroups.map((g) => (
+                    <option key={g.organ} value={g.organ}>
+                      عضو: {g.organ} ({g.items.length})
+                    </option>
+                  ))}
+                  <option value="عمومی">عمومی و جمع‌بندی</option>
+                </select>
+
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setQuickMacroFilter('all')}
+                    className={`flex-1 text-[10px] px-2 py-1 rounded-lg font-bold transition-colors cursor-pointer ${
+                      quickMacroFilter === 'all'
+                        ? 'bg-slate-900 text-white'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    همه
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setQuickMacroFilter('normal')}
+                    className={`flex-1 text-[10px] px-2 py-1 rounded-lg font-bold transition-colors cursor-pointer ${
+                      quickMacroFilter === 'normal'
+                        ? 'bg-emerald-700 text-white'
+                        : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                    }`}
+                  >
+                    ✓ نرمال
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setQuickMacroFilter('pathology')}
+                    className={`flex-1 text-[10px] px-2 py-1 rounded-lg font-bold transition-colors cursor-pointer ${
+                      quickMacroFilter === 'pathology'
+                        ? 'bg-amber-600 text-white'
+                        : 'bg-amber-50 text-amber-900 hover:bg-amber-100'
+                    }`}
+                  >
+                    پاتولوژی
+                  </button>
+                </div>
               </div>
 
-              {/* Shortcut Cards List */}
+              {/* Unified Organ Sentence & Shortcut Cards List */}
               <div className="space-y-1.5 max-h-[460px] 2xl:max-h-[calc(100vh-340px)] overflow-y-auto pr-0.5">
-                {filteredShortcuts.slice(0, 18).map((sc) => (
-                  <button
-                    key={sc.id}
-                    onClick={() => insertShortcut(sc)}
-                    className="w-full text-right p-2 rounded-xl border border-slate-100 hover:border-teal-300 hover:bg-teal-50/60 transition-all group flex items-start justify-between gap-2 bg-slate-50/50 cursor-pointer"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="text-xs font-bold text-slate-800 group-hover:text-teal-900 flex items-center gap-1.5">
-                        <span>{sc.label}</span>
+                {filteredShortcuts.slice(0, 24).map((sc) => {
+                  const matchedOrganGroup = unifiedOrganGroups.find((g) => g.organ === sc.organ);
+                  return (
+                    <button
+                      key={sc.id}
+                      type="button"
+                      onClick={() => {
+                        if (matchedOrganGroup && activeStudy) {
+                          handleApplyOrganShortcut(activeStudy, matchedOrganGroup, sc);
+                        } else {
+                          insertShortcut(sc);
+                        }
+                      }}
+                      className="w-full text-right p-2 rounded-xl border border-slate-100 hover:border-teal-300 hover:bg-teal-50/60 transition-all group flex items-start justify-between gap-2 bg-slate-50/50 cursor-pointer"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-bold text-slate-800 group-hover:text-teal-900 flex items-center gap-1 flex-wrap">
+                          {sc.organ && sc.organ !== 'عمومی' && (
+                            <span className="text-[9.5px] px-1.5 py-0.2 rounded bg-teal-50 text-teal-800 border border-teal-200 font-black">
+                              {sc.organ}
+                            </span>
+                          )}
+                          <span>{sc.label}</span>
+                        </div>
+                        <div className="text-[10px] text-slate-500 line-clamp-1 mt-0.5">
+                          {sc.expansion}
+                        </div>
                       </div>
-                      <div className="text-[10px] text-slate-500 line-clamp-1 mt-0.5">
-                        {sc.expansion}
+                      <div className="flex flex-col items-end gap-1 shrink-0">
+                        {sc.trigger && (
+                          <span
+                            dir="ltr"
+                            className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-amber-100/80 text-amber-900 border border-amber-300"
+                          >
+                            {sc.trigger}
+                          </span>
+                        )}
+                        {sc.hotkey && (
+                          <span
+                            dir="ltr"
+                            className="text-[9px] font-mono font-bold px-1 py-0.2 rounded bg-indigo-50 text-indigo-800 border border-indigo-200"
+                          >
+                            {sc.hotkey}
+                          </span>
+                        )}
                       </div>
-                    </div>
-                    <div className="flex flex-col items-end gap-1 shrink-0">
-                      <span
-                        dir="ltr"
-                        className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-amber-100/80 text-amber-900 border border-amber-300"
-                      >
-                        {sc.trigger}
-                      </span>
-                      {sc.hotkey && (
-                        <span
-                          dir="ltr"
-                          className="text-[9px] font-mono font-bold px-1 py-0.2 rounded bg-indigo-50 text-indigo-800 border border-indigo-200"
-                        >
-                          {sc.hotkey}
-                        </span>
-                      )}
-                    </div>
-                  </button>
-                ))}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>

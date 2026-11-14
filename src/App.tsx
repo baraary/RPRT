@@ -30,7 +30,8 @@ import { PrintPreviewModal } from './components/PrintPreviewModal';
 import { ReportHistoryDrawer } from './components/ReportHistoryDrawer';
 import { SettingsModal } from './components/SettingsModal';
 import { FontManagerModal } from './components/FontManagerModal';
-import { PlusCircle, X, Check, Printer } from 'lucide-react';
+import { CommandPaletteModal } from './components/CommandPaletteModal';
+import { PlusCircle, X, Check, Printer, Search } from 'lucide-react';
 import {
   stripSpellHighlights,
   createSlotHtml,
@@ -169,12 +170,14 @@ export default function App() {
   // Modals & Drawers state
   const [isTemplatesOpen, setIsTemplatesOpen] = useState(false);
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
+  const [shortcutsModalOrganFilter, setShortcutsModalOrganFilter] = useState<string>('all');
   const [isDoctorsOpen, setIsDoctorsOpen] = useState(false);
   const [isTypistAnalyticsOpen, setIsTypistAnalyticsOpen] = useState(false);
   const [isPrintOpen, setIsPrintOpen] = useState(false);
   const [isReportsOpen, setIsReportsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isFontManagerOpen, setIsFontManagerOpen] = useState(false);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [cloneTargetTemplate, setCloneTargetTemplate] = useState<MedicalTemplate | null>(null);
 
   // New Report Confirmation Modal
@@ -192,7 +195,6 @@ export default function App() {
   const [isCreateTemplateModalOpen, setIsCreateTemplateModalOpen] = useState(false);
   const [newTemplateTitleInput, setNewTemplateTitleInput] = useState('');
   const [newTemplateDoctorId, setNewTemplateDoctorId] = useState<string>('all');
-  const [newTemplatePin, setNewTemplatePin] = useState<boolean>(true);
 
   // Voice Dictation & Zen Mode
   const [isListening, setIsListening] = useState(false);
@@ -205,6 +207,32 @@ export default function App() {
     const chosenUiFont = settings.uiFont || "'Vazirmatn', sans-serif";
     document.documentElement.style.setProperty('--ui-font-family', chosenUiFont);
   }, [settings.uiFont]);
+
+  // Dynamically apply Ambient Modality Theme CSS variables (--modality-accent) across the workspace
+  useEffect(() => {
+    const defaultHex: Record<Modality, string> = {
+      sonography: '#0284c7',
+      mri: '#4f46e5',
+      ct: '#059669',
+    };
+    const hex = settings.modalityColors?.[modality] || defaultHex[modality] || '#0284c7';
+    document.documentElement.style.setProperty('--modality-accent', hex);
+    document.documentElement.style.setProperty('--modality-accent-soft', `${hex}14`);
+    document.documentElement.style.setProperty('--modality-accent-border', `${hex}45`);
+    document.documentElement.style.setProperty('--modality-accent-glow', `${hex}30`);
+  }, [modality, settings.modalityColors]);
+
+  // Global Ctrl+K / Cmd+K shortcut for Spotlight Command Palette
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setIsCommandPaletteOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, []);
 
   // Sync with IndexedDB multi-GB storage engine, SQLite LAN Server & Automated Local Folder Backup
   useEffect(() => {
@@ -360,14 +388,14 @@ export default function App() {
       const toolbarEl = document.getElementById('app-editor-toolbar');
       const quickbarEl = document.getElementById('app-editor-quickbar');
 
-      const navH = navEl ? Math.ceil(navEl.getBoundingClientRect().height) : 102;
+      const navH = navEl ? Math.round(navEl.getBoundingClientRect().height) : 102;
       const tabsbarH = zenMode
         ? 0
         : tabsbarEl
-        ? Math.ceil(tabsbarEl.getBoundingClientRect().height)
+        ? Math.round(tabsbarEl.getBoundingClientRect().height)
         : 44;
-      const toolbarH = toolbarEl ? Math.ceil(toolbarEl.getBoundingClientRect().height) : 46;
-      const quickbarH = quickbarEl ? Math.ceil(quickbarEl.getBoundingClientRect().height) : 96;
+      const toolbarH = toolbarEl ? Math.round(toolbarEl.getBoundingClientRect().height) : 46;
+      const quickbarH = quickbarEl ? Math.round(quickbarEl.getBoundingClientRect().height) : 96;
 
       document.documentElement.style.setProperty('--navbar-height', `${navH}px`);
       document.documentElement.style.setProperty('--tabsbar-height', `${tabsbarH}px`);
@@ -1204,21 +1232,7 @@ export default function App() {
     showToast('قالب با موفقیت برای پزشک انتخابی کپی شد.');
   };
 
-  // Toggle Pin / Unpin template for Proposal #14
-  const handleTogglePinTemplate = (id: string) => {
-    const updated = StorageService.togglePinTemplate(id);
-    setTemplates(updated);
-    const target = updated.find((t) => t.id === id);
-    if (target) {
-      showToast(
-        target.isPinned
-          ? `📌 قالب «${target.title}» در نوار بالای ویرایشگر سنجاق شد.`
-          : `سنجاق قالب «${target.title}» برداشته شد.`
-      );
-    }
-  };
-
-  // Apply a pinned template directly to a specific study
+  // Apply a template directly to a specific study
   const handleApplyPinnedTemplate = (template: MedicalTemplate, studyId: string) => {
     const updatedTemplates = StorageService.incrementTemplateUsage(template.id);
     setTemplates(updatedTemplates);
@@ -1245,7 +1259,7 @@ export default function App() {
       )
     );
     setModality(template.modality);
-    showToast(`⚡ قالب سنجاق‌شده «${template.title}» اعمال شد.`);
+    showToast(`⚡ قالب «${template.title}» اعمال شد.`);
   };
 
   // Delete template
@@ -1262,7 +1276,6 @@ export default function App() {
     const active = studies.find((s) => s.id === targetId) || studies[0];
     setNewTemplateTitleInput(active?.titleAndTechnique.slice(0, 55) || 'قالب جدید');
     setNewTemplateDoctorId(activeDoctorId);
-    setNewTemplatePin(true);
     setIsTemplatesOpen(false);
     setIsCreateTemplateModalOpen(true);
   };
@@ -1275,7 +1288,6 @@ export default function App() {
       title: newTemplateTitleInput.trim(),
       modality: active.modality,
       doctorId: newTemplateDoctorId,
-      isPinned: newTemplatePin,
       tags: [active.modality, 'سفارشی'],
       technique: active.titleAndTechnique,
       comparison: active.showComparison ? active.comparison : '',
@@ -1291,13 +1303,12 @@ export default function App() {
   };
 
   // Inline 1-step save directly inside TemplateDrawer without closing drawer
-  const handleQuickSaveCurrentAsTemplate = (title: string, docId: string, pin: boolean) => {
+  const handleQuickSaveCurrentAsTemplate = (title: string, docId: string) => {
     const active = studies.find((s) => s.id === targetStudyIdForTemplate) || studies[0];
     StorageService.addTemplate({
       title,
       modality: active.modality,
       doctorId: docId,
-      isPinned: pin,
       tags: [active.modality, 'سفارشی'],
       technique: active.titleAndTechnique,
       comparison: active.showComparison ? active.comparison : '',
@@ -1311,17 +1322,29 @@ export default function App() {
     showToast(`✓ قالب جدید «${title}» در لیست قالب‌ها ثبت شد.`);
   };
 
-  // Shortcuts actions
+  // Unified Organ Sentences & Shortcuts actions
   const handleAddShortcut = (sc: Omit<MedicalShortcut, 'id'>) => {
     StorageService.addShortcut(sc);
     setShortcuts(StorageService.getShortcuts());
-    showToast(`شورتکات «${sc.trigger}» ذخیره شد.`);
+    showToast(`✓ جمله / شورتکات «${sc.trigger}» در بانک یکپارچه ذخیره شد.`);
+  };
+
+  const handleUpdateShortcut = (id: string, updates: Partial<MedicalShortcut>) => {
+    const updated = StorageService.updateShortcut(id, updates);
+    setShortcuts(updated);
+    showToast('✓ تغییرات جمله / شورتکات ذخیره شد.');
   };
 
   const handleDeleteShortcut = (id: string) => {
     const updated = StorageService.deleteShortcut(id);
     setShortcuts(updated);
-    showToast('شورتکات حذف شد.');
+    showToast('جمله / شورتکات حذف شد.');
+  };
+
+  const handleResetShortcutsToDefaults = () => {
+    const updated = StorageService.resetShortcutsToDefaults();
+    setShortcuts(updated);
+    showToast('↺ بانک جملات اعضا و شورتکات‌ها به مقادیر استاندارد بازنشانی شد.');
   };
 
   // Doctor actions
@@ -1501,7 +1524,7 @@ export default function App() {
 
   return (
     <div
-      className={`min-h-screen bg-slate-100 flex flex-col text-slate-800 font-sans transition-colors ${
+      className={`min-h-screen medical-desk-canvas flex flex-col text-slate-800 font-sans transition-colors ${
         settings.darkMode ? 'dark-theme' : ''
       }`}
       style={{
@@ -1511,7 +1534,7 @@ export default function App() {
     >
       {/* Toast Notification Banner (Positioned at bottom-left so it never covers top modality buttons) */}
       {toastMessage && (
-        <div className="fixed bottom-14 left-6 z-50 bg-slate-900/95 backdrop-blur-md text-white text-xs font-semibold px-4 py-2.5 rounded-2xl shadow-2xl border border-slate-700 flex items-center gap-2.5 animate-fadeSlideUp max-w-md">
+        <div className="fixed bottom-16 left-6 z-[90] bg-slate-900/95 backdrop-blur-md text-white text-xs font-semibold px-4 py-2.5 rounded-2xl shadow-2xl border border-slate-700 flex items-center gap-2.5 animate-fadeSlideUp max-w-md">
           <Check className="w-4 h-4 text-emerald-400 shrink-0" />
           <span className="leading-relaxed">{toastMessage}</span>
           <button
@@ -1576,6 +1599,7 @@ export default function App() {
           onCloseTab={handleCloseWorkspaceTab}
           onUpdateTabPatientName={handleUpdateTabPatientName}
           onOpenReports={() => setIsReportsOpen(true)}
+          onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
           reportsCount={savedReports.length}
         />
       )}
@@ -1656,8 +1680,8 @@ export default function App() {
         }}
       />
 
-      {/* Main Medical Document Canvas (with Multi-Study Support, Zen Focus Mode, and Split-Screen Prior Report Comparison) */}
-      <main className="flex-1 pb-16">
+      {/* Main Medical Document Canvas (with Smooth Tab Crossfade, Multi-Study Support, Zen Focus Mode, and Split-Screen Prior Report Comparison) */}
+      <main key={`${activeTabId}-${modality}`} className="flex-1 pb-20 animate-tabSwitch">
         <RichMedicalEditor
           studies={studies}
           onUpdateStudy={handleUpdateStudy}
@@ -1675,7 +1699,10 @@ export default function App() {
             setTemplateDrawerMode('replace');
             setIsTemplatesOpen(true);
           }}
-          onOpenShortcuts={() => setIsShortcutsOpen(true)}
+          onOpenShortcuts={(initialOrgan) => {
+            setShortcutsModalOrganFilter(initialOrgan || 'all');
+            setIsShortcutsOpen(true);
+          }}
           headingFont={settings.headingFont}
           headingFontSize={settings.headingFontSize}
           defaultFont={settings.defaultFont || 'Vazirmatn'}
@@ -1694,7 +1721,6 @@ export default function App() {
           editorZoom={editorZoom}
           templates={templates}
           onApplyPinnedTemplate={handleApplyPinnedTemplate}
-          onTogglePinTemplate={handleTogglePinTemplate}
           onStartQuickSaveAsTemplate={handleStartCreateTemplate}
           zenMode={zenMode}
           onToggleZenMode={() => {
@@ -1719,59 +1745,75 @@ export default function App() {
         />
       </main>
 
-      {/* Floating Bottom Quick Action Strip */}
-      <footer className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-slate-200/90 py-2 z-20 shadow-md no-print">
-        <div className="w-full max-w-[1680px] 2xl:max-w-[1840px] mx-auto px-4 sm:px-6 lg:px-8 2xl:px-10 flex items-center justify-between flex-wrap gap-2 text-xs">
-          <div className="flex items-center gap-3 text-slate-500 flex-wrap">
-            <span className="flex items-center gap-1.5 font-bold text-slate-700">
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  hasUnsavedDraftChanges
-                    ? 'bg-amber-500 animate-pulse'
-                    : 'bg-emerald-500'
-                }`}
-              />
-              {hasUnsavedDraftChanges
-                ? 'تغییرات جدید شناسایی شد (ذخیره پیش‌نویس خودکار هر ۳۰ ثانیه)'
-                : `پیش‌نویس خودکار ذخیره شد (${lastAutoDraftTime})`}
-            </span>
-          </div>
-
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              type="button"
-              onClick={() => setIsReportsOpen(true)}
-              className="px-3 py-1.5 bg-slate-100 hover:bg-teal-50 text-slate-700 hover:text-teal-800 border border-slate-200 hover:border-teal-300 font-bold rounded-xl transition-colors cursor-pointer flex items-center gap-1.5"
-              title="مشاهده و جستجوی آرشیو گزارش‌های ذخیره‌شده بیماران"
-            >
-              <span>آرشیو بیماران</span>
-              <span className="px-1.5 py-0.2 rounded-md bg-slate-200/80 text-slate-700 text-[10px] font-mono">
-                {savedReports.length}
+      {/* Floating Frosted-Glass Bottom Dock */}
+      <footer className="fixed bottom-2.5 left-0 right-0 z-20 px-4 sm:px-6 lg:px-8 2xl:px-10 pointer-events-none no-print">
+        <div className="w-full max-w-[1680px] 2xl:max-w-[1840px] mx-auto">
+          <div className="pointer-events-auto bg-white/90 backdrop-blur-xl border border-slate-200/90 rounded-2xl px-4 py-2 shadow-[0_12px_36px_-10px_rgba(15,23,42,0.16)] flex items-center justify-between flex-wrap gap-2 text-xs transition-all duration-300">
+            <div className="flex items-center gap-3 text-slate-500 flex-wrap">
+              <span className="flex items-center gap-1.5 font-bold text-slate-700">
+                <span
+                  className={`w-2 h-2 rounded-full transition-colors ${
+                    hasUnsavedDraftChanges
+                      ? 'bg-amber-500 animate-pulse'
+                      : 'bg-emerald-500'
+                  }`}
+                />
+                {hasUnsavedDraftChanges
+                  ? 'تغییرات جدید شناسایی شد (ذخیره پیش‌نویس خودکار هر ۳۰ ثانیه)'
+                  : `پیش‌نویس خودکار ذخیره شد (${lastAutoDraftTime})`}
               </span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSaveReportToArchive(false)}
-              className="px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl shadow-xs transition-colors cursor-pointer"
-            >
-              ذخیره در آرشیو بیماران
-            </button>
-            <button
-              type="button"
-              onClick={() => setIsPrintOpen(true)}
-              className="px-4 py-1.5 bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-xl shadow-xs transition-colors inline-flex items-center gap-1.5 cursor-pointer"
-              title="مشاهده پیش‌نمایش سربرگ A4، تنظیمات چاپ و صدور گزارش نهایی"
-            >
-              <Printer className="w-3.5 h-3.5 shrink-0" />
-              <span>پیش‌نمایش چاپ سربرگ و صدور گزارش</span>
-            </button>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setIsCommandPaletteOpen(true)}
+                className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200/80 text-slate-700 border border-slate-200/90 font-bold rounded-xl transition-all duration-200 cursor-pointer flex items-center gap-1.5 active:scale-95"
+                title="جستجوگر سریع قالب‌ها، تب‌ها و دستورات (Ctrl+K)"
+              >
+                <Search className="w-3.5 h-3.5 text-slate-500" />
+                <span className="hidden sm:inline">فرمان سریع</span>
+                <kbd className="px-1.5 py-0.2 rounded bg-white text-slate-600 border border-slate-200 text-[10px] font-mono">
+                  Ctrl+K
+                </kbd>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsReportsOpen(true)}
+                className="px-3 py-1.5 bg-slate-100 hover:bg-teal-50 text-slate-700 hover:text-teal-800 border border-slate-200/90 hover:border-teal-300 font-bold rounded-xl transition-all duration-200 cursor-pointer flex items-center gap-1.5 active:scale-95"
+                title="مشاهده و جستجوی آرشیو گزارش‌های ذخیره‌شده بیماران"
+              >
+                <span>آرشیو بیماران</span>
+                <span className="px-1.5 py-0.2 rounded-md bg-slate-200/80 text-slate-700 text-[10px] font-mono tabular-nums">
+                  {savedReports.length}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSaveReportToArchive(false)}
+                className="px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl shadow-xs transition-all duration-200 cursor-pointer active:scale-95 hover:-translate-y-[0.5px]"
+              >
+                ذخیره در آرشیو بیماران
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsPrintOpen(true)}
+                style={{ backgroundColor: 'var(--modality-accent, #0284c7)' }}
+                className="px-4 py-1.5 hover:opacity-95 text-white font-bold rounded-xl shadow-sm transition-all duration-200 inline-flex items-center gap-1.5 cursor-pointer active:scale-95 hover:-translate-y-[0.5px]"
+                title="مشاهده پیش‌نمایش سربرگ A4، تنظیمات چاپ و صدور گزارش نهایی"
+              >
+                <Printer className="w-3.5 h-3.5 shrink-0" />
+                <span>پیش‌نمایش چاپ سربرگ و صدور گزارش</span>
+              </button>
+            </div>
           </div>
         </div>
       </footer>
 
       {/* Confirmation Modal for New Report */}
       {isNewReportModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[80] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full p-5 space-y-4 animate-scaleIn">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 text-slate-900 font-bold text-sm">
@@ -1810,7 +1852,7 @@ export default function App() {
 
       {/* Multi-Select Template Title Picker Modal when clicking "+" (New Patient Tab) */}
       {isNewTabTemplatePickerOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/65 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[80] bg-slate-900/65 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 max-w-xl w-full overflow-hidden animate-scaleIn flex flex-col max-h-[86vh]">
             <div className="px-5 py-4 bg-slate-900 text-white flex items-start justify-between gap-3">
               <div className="min-w-0">
@@ -2091,7 +2133,7 @@ export default function App() {
 
       {/* 1-Step Modal for Saving Current Study as a Ready Template */}
       {isCreateTemplateModalOpen && (
-        <div className="fixed inset-0 z-[70] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[80] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full p-5 space-y-4 animate-scaleIn">
             <div className="flex items-center justify-between">
               <div className="text-sm font-black text-slate-900">
@@ -2144,16 +2186,6 @@ export default function App() {
                   ))}
                 </select>
               </div>
-
-              <label className="flex items-center gap-2 p-2.5 rounded-xl bg-amber-50/70 border border-amber-200 text-xs font-bold text-amber-950 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={newTemplatePin}
-                  onChange={(e) => setNewTemplatePin(e.target.checked)}
-                  className="w-4 h-4 rounded text-teal-600 focus:ring-teal-500 cursor-pointer"
-                />
-                <span>سنجاق شدن در نوار بالای ویرایشگر (دسترسی سریع با یک کلیک)</span>
-              </label>
             </div>
 
             <div className="flex items-center justify-end gap-2 pt-2">
@@ -2192,7 +2224,6 @@ export default function App() {
         onAddAsNewStudy={handleAddTemplateAsNewStudy}
         onCloneTemplate={(tpl) => setCloneTargetTemplate(tpl)}
         onDeleteTemplate={handleDeleteTemplate}
-        onTogglePinTemplate={handleTogglePinTemplate}
         onQuickSaveCurrentAsTemplate={handleQuickSaveCurrentAsTemplate}
         defaultSuggestedTitle={
           (studies.find((s) => s.id === targetStudyIdForTemplate) || studies[0])?.titleAndTechnique.slice(
@@ -2215,7 +2246,10 @@ export default function App() {
         shortcuts={shortcuts}
         templates={templates}
         onAddShortcut={handleAddShortcut}
+        onUpdateShortcut={handleUpdateShortcut}
         onDeleteShortcut={handleDeleteShortcut}
+        onResetDefaults={handleResetShortcutsToDefaults}
+        initialOrganFilter={shortcutsModalOrganFilter}
       />
 
       <DoctorManagementModal
@@ -2302,6 +2336,36 @@ export default function App() {
         fonts={settings.customFonts || []}
         onAddFont={handleAddFont}
         onDeleteFont={handleDeleteFont}
+      />
+
+      <CommandPaletteModal
+        isOpen={isCommandPaletteOpen}
+        onClose={() => setIsCommandPaletteOpen(false)}
+        modality={modality}
+        onSelectModality={handleSelectModality}
+        templates={templates}
+        onApplyTemplate={(tpl) => {
+          handleApplyPinnedTemplate(tpl, studies[0]?.id || '');
+        }}
+        tabs={workspaceTabs}
+        activeTabId={activeTabId}
+        onSelectTab={handleSelectWorkspaceTab}
+        onAddNewTab={handleAddNewPatientTab}
+        doctors={doctors}
+        activeDoctorId={activeDoctorId}
+        onSelectDoctor={(id) => {
+          setActiveDoctorId(id);
+          StorageService.saveSettings({ activeDoctorId: id });
+        }}
+        onOpenPrintPreview={() => setIsPrintOpen(true)}
+        onSaveToArchive={() => handleSaveReportToArchive(false)}
+        onOpenArchive={() => setIsReportsOpen(true)}
+        darkMode={Boolean(settings.darkMode)}
+        onToggleDarkMode={() => {
+          const nextDark = !settings.darkMode;
+          setSettings((prev) => ({ ...prev, darkMode: nextDark }));
+          StorageService.saveSettings({ darkMode: nextDark });
+        }}
       />
     </div>
   );

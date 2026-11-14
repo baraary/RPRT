@@ -547,7 +547,31 @@ export const ReportHistoryDrawer: React.FC<ReportHistoryDrawerProps> = ({
     search,
   ]);
 
-  if (!isOpen) return null;
+  const [rendered, setRendered] = useState(false);
+  const [isClosing, setIsClosing] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      setRendered(true);
+      setIsClosing(false);
+    } else if (rendered) {
+      setIsClosing(true);
+      const timer = setTimeout(() => {
+        setRendered(false);
+        setIsClosing(false);
+      }, 240);
+      return () => clearTimeout(timer);
+    }
+  }, [isOpen, rendered]);
+
+  const handleSmoothClose = () => {
+    setIsClosing(true);
+    setTimeout(() => {
+      onClose();
+    }, 220);
+  };
+
+  if (!rendered) return null;
 
   // Export archive as CSV
   const handleExportCsv = () => {
@@ -574,8 +598,20 @@ export const ReportHistoryDrawer: React.FC<ReportHistoryDrawerProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-hidden bg-slate-900/60 backdrop-blur-xs flex justify-end">
-      <div className="bg-white w-full max-w-2xl h-full shadow-2xl flex flex-col animate-slideLeft">
+    <div
+      onClick={handleSmoothClose}
+      className={`fixed inset-0 z-50 overflow-hidden flex justify-end transition-all duration-250 ${
+        isClosing
+          ? 'bg-slate-900/0 backdrop-blur-none opacity-0'
+          : 'bg-slate-900/60 backdrop-blur-xs opacity-100'
+      }`}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className={`bg-white w-full max-w-2xl h-full shadow-2xl flex flex-col transition-all duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+          isClosing ? '-translate-x-full opacity-0' : 'translate-x-0 opacity-100 animate-slideLeft'
+        }`}
+      >
         {/* Header */}
         <div className="p-4 sm:p-5 border-b border-slate-200 bg-slate-900 text-white flex items-start justify-between gap-3 shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
@@ -593,7 +629,7 @@ export const ReportHistoryDrawer: React.FC<ReportHistoryDrawerProps> = ({
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleSmoothClose}
             className="h-8 px-2.5 rounded-xl bg-slate-800 hover:bg-rose-600 text-slate-200 hover:text-white border border-slate-700 hover:border-rose-500 flex items-center gap-1 text-xs font-bold shrink-0 transition-colors cursor-pointer"
           >
             <span>بستن</span>

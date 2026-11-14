@@ -105,6 +105,13 @@ export const PatientHeader: React.FC<PatientHeaderProps> = ({
   onSanitizeGenderMismatch,
 }) => {
   const [collapsed, setCollapsed] = useState(false);
+  const [autoCompactOnType, setAutoCompactOnType] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('radiology_auto_compact_header') === 'true';
+    } catch {
+      return false;
+    }
+  });
   const [autoDetectedGenderTag, setAutoDetectedGenderTag] = useState<string | null>(null);
 
   // Referring Physician Autocomplete & Frequency State
@@ -121,6 +128,29 @@ export const PatientHeader: React.FC<PatientHeaderProps> = ({
   const [pickerYear, setPickerYear] = useState<number>(todayJalali.year);
   const [pickerMonth, setPickerMonth] = useState<number>(todayJalali.month);
   const dateContainerRef = useRef<HTMLDivElement | null>(null);
+
+  // Smart Auto-Compact listener: when typist focuses inside [contenteditable="true"], smoothly collapse if autoCompactOnType is enabled
+  useEffect(() => {
+    if (!autoCompactOnType) return;
+    const handleFocusIn = (e: FocusEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && target.getAttribute('contenteditable') === 'true') {
+        setCollapsed(true);
+      }
+    };
+    document.addEventListener('focusin', handleFocusIn);
+    return () => document.removeEventListener('focusin', handleFocusIn);
+  }, [autoCompactOnType]);
+
+  const toggleAutoCompact = () => {
+    setAutoCompactOnType((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('radiology_auto_compact_header', String(next));
+      } catch {}
+      return next;
+    });
+  };
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -214,149 +244,217 @@ export const PatientHeader: React.FC<PatientHeaderProps> = ({
   const currentSelectedClean = toEnglishDigits(patientInfo.reportDate || '');
 
   return (
-    <div className="bg-white border-b border-slate-200 shadow-2xs no-print">
-      {/* Gender-Anatomy Mismatch Warning & One-Click Sanitizer Bar */}
-      {genderMismatch?.hasMismatch && (
-        <div className="bg-amber-50 border-b border-amber-300 px-4 py-2.5 flex items-center justify-between flex-wrap gap-2 text-amber-950 text-xs animate-fadeIn">
-          <div className="flex items-center gap-2 font-bold">
-            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-            <span>{genderMismatch.warningText}</span>
+    <div
+      className={`w-full max-w-[1680px] 2xl:max-w-[1840px] mx-auto px-4 sm:px-6 lg:px-8 2xl:px-10 pb-1.5 no-print relative ${
+        showRefDropdown || showDatePicker ? 'z-40' : 'z-25'
+      }`}
+    >
+      <div className="bg-white/95 backdrop-blur-md border border-t-0 border-slate-200/90 rounded-b-2xl shadow-xs transition-all duration-300">
+        {/* Gender-Anatomy Mismatch Warning & One-Click Sanitizer Bar */}
+        {genderMismatch?.hasMismatch && (
+          <div className="bg-amber-50 border-b border-amber-300 px-4 py-2 flex items-center justify-between flex-wrap gap-2 text-amber-950 text-xs animate-fadeIn">
+            <div className="flex items-center gap-2 font-bold">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>{genderMismatch.warningText}</span>
+            </div>
+            {onSanitizeGenderMismatch && (
+              <button
+                type="button"
+                onClick={onSanitizeGenderMismatch}
+                className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl shadow-2xs flex items-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <Wand2 className="w-3.5 h-3.5" />
+                <span>اصلاح خودکار متن متناسب با جنسیت ({genderMismatch.genderLabel})</span>
+              </button>
+            )}
           </div>
-          {onSanitizeGenderMismatch && (
-            <button
-              type="button"
-              onClick={onSanitizeGenderMismatch}
-              className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl shadow-2xs flex items-center gap-1.5 transition-colors cursor-pointer"
-            >
-              <Wand2 className="w-3.5 h-3.5" />
-              <span>اصلاح خودکار متن متناسب با جنسیت ({genderMismatch.genderLabel})</span>
-            </button>
-          )}
-        </div>
-      )}
+        )}
 
-      {/* Critical Alert Warning Bar */}
-      {criticalAlert && (
-        <div className="bg-rose-50 border-b border-rose-200 px-4 py-2.5 flex items-center justify-between text-rose-800 text-xs animate-fadeIn">
-          <div className="flex items-center gap-2 font-medium">
-            <AlertTriangle className="w-4 h-4 text-rose-600 animate-bounce shrink-0" />
-            <span>{criticalAlert}</span>
+        {/* Critical Alert Warning Bar */}
+        {criticalAlert && (
+          <div className="bg-rose-50 border-b border-rose-200 px-4 py-2 flex items-center justify-between text-rose-800 text-xs animate-fadeIn">
+            <div className="flex items-center gap-2 font-medium">
+              <AlertTriangle className="w-4 h-4 text-rose-600 animate-bounce shrink-0" />
+              <span>{criticalAlert}</span>
+            </div>
+            {onClearCriticalAlert && (
+              <button
+                onClick={onClearCriticalAlert}
+                className="text-rose-600 hover:text-rose-900 font-semibold px-2 py-0.5 rounded hover:bg-rose-100"
+              >
+                متوجه شدم
+              </button>
+            )}
           </div>
-          {onClearCriticalAlert && (
-            <button
-              onClick={onClearCriticalAlert}
-              className="text-rose-600 hover:text-rose-900 font-semibold px-2 py-0.5 rounded hover:bg-rose-100"
-            >
-              متوجه شدم
-            </button>
-          )}
-        </div>
-      )}
+        )}
 
-      {/* Patient Header Section */}
-      <div className="max-w-[1680px] 2xl:max-w-[1840px] mx-auto px-4 sm:px-6 lg:px-8 2xl:px-10 py-2.5">
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <div className="flex items-center gap-2 flex-wrap">
-            <User className="w-4 h-4 text-teal-600" />
-            <h2 className="text-xs font-bold text-slate-800">
-              مشخصات بیمار و پرونده
-            </h2>
-            {patientInfo.fullName && (
-              <span className="text-xs font-semibold text-teal-700 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
-                {patientInfo.fullName} {patientInfo.age ? `(${patientInfo.age} ساله)` : ''} •{' '}
+        {/* Patient Header Summary Strip & Smooth Accordion Controls */}
+        <div className="px-3.5 py-2">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div
+              onClick={() => {
+                if (collapsed) setCollapsed(false);
+              }}
+              className={`flex items-center gap-2 flex-wrap ${
+                collapsed ? 'cursor-pointer hover:opacity-90' : ''
+              }`}
+              title={collapsed ? 'برای باز شدن کامل فرم مشخصات بیمار کلیک کنید' : undefined}
+            >
+              <div
+                className="w-6 h-6 rounded-lg flex items-center justify-center text-white shadow-2xs shrink-0 transition-colors duration-300"
+                style={{ backgroundColor: 'var(--modality-accent, #0284c7)' }}
+              >
+                <User className="w-3.5 h-3.5" />
+              </div>
+              <h2 className="text-xs font-extrabold text-slate-800">
+                مشخصات بیمار و پذیرش
+              </h2>
+              <span className="text-slate-300" aria-hidden="true">
+                ·
+              </span>
+              <span className="text-xs font-bold text-slate-700">
+                {patientInfo.fullName.trim() || 'نام بیمار ثبت نشده'}
+                {patientInfo.age ? ` (${patientInfo.age} ساله)` : ''}
+              </span>
+              <span className="text-slate-300" aria-hidden="true">
+                ·
+              </span>
+              <span className="text-xs text-slate-600 font-medium">
                 {patientInfo.gender === 'male' ? 'آقا' : patientInfo.gender === 'female' ? 'خانم' : 'کودک'}
               </span>
-            )}
-            {autoDetectedGenderTag && (
-              <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1">
-                <Sparkles className="w-3 h-3 text-emerald-600" />
-                {autoDetectedGenderTag}
+              {patientInfo.referringPhysician && (
+                <>
+                  <span className="text-slate-300" aria-hidden="true">
+                    ·
+                  </span>
+                  <span className="text-xs text-slate-600">
+                    پزشک معرف: <strong>{patientInfo.referringPhysician}</strong>
+                  </span>
+                </>
+              )}
+              <span className="text-slate-300" aria-hidden="true">
+                ·
               </span>
-            )}
-            <span className="text-[11px] font-mono text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
-              پذیرش: {patientInfo.admissionNumber}
-            </span>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setCollapsed((prev) => !prev)}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 hover:text-slate-900 text-xs font-semibold transition-colors cursor-pointer select-none"
-            >
-              <span>{collapsed ? 'نمایش مشخصات بیمار' : 'کوچک‌نمایی کادر بیمار'}</span>
-              {collapsed ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
-            </button>
-          </div>
-        </div>
-
-        {!collapsed && (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2.5 2xl:gap-4 mt-2.5 pt-2 border-t border-slate-100">
-            {/* Full Name */}
-            <div>
-              <label className="block text-[11px] font-medium text-slate-600 mb-0.5">
-                نام و نام خانوادگی (تشخیص جنسیت)
-              </label>
-              <input
-                type="text"
-                value={patientInfo.fullName}
-                onChange={(e) => updateField('fullName', e.target.value)}
-                placeholder="مثال: علی رضایی / سارا محمدی"
-                className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20 bg-slate-50/50 focus:bg-white transition-all"
-              />
+              <span className="text-[11px] font-mono tabular-nums text-slate-500">
+                پذیرش: {patientInfo.admissionNumber}
+              </span>
+              <span className="text-slate-300" aria-hidden="true">
+                ·
+              </span>
+              <span className="text-[11px] font-mono tabular-nums text-slate-500">
+                {patientInfo.reportDate}
+              </span>
+              {autoDetectedGenderTag && (
+                <span className="text-[10.5px] font-bold text-emerald-700 flex items-center gap-1 mr-1">
+                  <Sparkles className="w-3 h-3 text-emerald-600" />
+                  <span>{autoDetectedGenderTag}</span>
+                </span>
+              )}
             </div>
 
-            {/* National ID */}
-            <div>
-              <label className="block text-[11px] font-medium text-slate-600 mb-0.5">کد ملی / شناسه</label>
-              <input
-                type="text"
-                value={patientInfo.nationalId}
-                onChange={(e) => updateField('nationalId', e.target.value)}
-                placeholder="0012345678"
-                className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20 bg-slate-50/50 focus:bg-white font-mono transition-all"
-                dir="ltr"
-              />
-            </div>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={toggleAutoCompact}
+                title="در صورت فعال بودن، به محض شروع تایپ در ویرایشگر، کادر مشخصات بیمار به نرمی جمع می‌شود تا فضای صفحه بازتر شود"
+                className={`h-7 px-2.5 rounded-xl text-[11px] font-bold border transition-all duration-200 cursor-pointer select-none flex items-center gap-1 ${
+                  autoCompactOnType
+                    ? 'bg-teal-50 text-teal-800 border-teal-300'
+                    : 'bg-slate-50 hover:bg-slate-100 text-slate-500 border-slate-200'
+                }`}
+              >
+                <span>جمع‌شدن خودکار هنگام تایپ</span>
+                {autoCompactOnType && <Check className="w-3 h-3 text-teal-600" />}
+              </button>
 
-            {/* Age & Gender */}
-            <div className="flex gap-1.5">
-              <div className="w-1/2">
-                <label className="block text-[11px] font-medium text-slate-600 mb-0.5">سن</label>
-                <input
-                  type="text"
-                  value={patientInfo.age}
-                  onChange={(e) => updateField('age', e.target.value)}
-                  placeholder="۴۲"
-                  className="w-full text-xs px-2 py-1.5 rounded-lg border border-slate-200 focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20 bg-slate-50/50 focus:bg-white text-center transition-all"
+              <button
+                type="button"
+                onClick={() => setCollapsed((prev) => !prev)}
+                className="h-7 flex items-center gap-1.5 px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200/80 text-slate-700 hover:text-slate-900 text-xs font-bold transition-all duration-200 cursor-pointer select-none active:scale-95"
+              >
+                <span>{collapsed ? 'باز کردن مشخصات' : 'جمع کردن'}</span>
+                <ChevronUp
+                  className={`w-3.5 h-3.5 transition-transform duration-300 ${
+                    collapsed ? 'rotate-180' : 'rotate-0'
+                  }`}
                 />
-              </div>
-              <div className="w-1/2">
-                <label className="block text-[11px] font-medium text-slate-600 mb-0.5">جنسیت</label>
-                <select
-                  value={patientInfo.gender}
-                  onChange={(e) => updateField('gender', e.target.value as any)}
-                  className="w-full text-xs px-1.5 py-1.5 rounded-lg border border-slate-200 focus:border-teal-500 bg-slate-50/50 font-bold"
-                >
-                  <option value="female">زن (خانم)</option>
-                  <option value="male">مرد (آقا)</option>
-                  <option value="other">کودک/نامشخص</option>
-                </select>
-              </div>
+              </button>
             </div>
+          </div>
 
-            {/* Admission Number */}
-            <div>
-              <label className="block text-[11px] font-medium text-slate-600 mb-0.5">شماره پذیرش / کد تصویر</label>
-              <input
-                type="text"
-                value={patientInfo.admissionNumber}
-                onChange={(e) => updateField('admissionNumber', e.target.value)}
-                placeholder="ADM-2026-904"
-                className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20 bg-slate-50/50 focus:bg-white font-mono transition-all"
-                dir="ltr"
-              />
-            </div>
+          {/* Smooth Grid-Height Accordion Wrapper (Zero Layout Jump) */}
+          <div
+            className={`smooth-accordion-wrapper ${
+              collapsed ? 'smooth-accordion-closed' : 'smooth-accordion-open'
+            }`}
+          >
+            <div className={collapsed ? 'smooth-accordion-inner' : 'min-h-0 overflow-visible'}>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2.5 2xl:gap-3.5 mt-2.5 pt-2.5 border-t border-slate-100">
+                {/* Full Name */}
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                    نام و نام خانوادگی (تشخیص جنسیت)
+                  </label>
+                  <input
+                    type="text"
+                    value={patientInfo.fullName}
+                    onChange={(e) => updateField('fullName', e.target.value)}
+                    placeholder="مثال: علی رضایی / سارا محمدی"
+                    className="clinical-input-focus w-full text-xs font-semibold px-2.5 py-1.5 rounded-xl border border-slate-200/90 bg-slate-50/70 focus:bg-white transition-all duration-200"
+                  />
+                </div>
+
+                {/* National ID */}
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 mb-1">کد ملی / شناسه</label>
+                  <input
+                    type="text"
+                    value={patientInfo.nationalId}
+                    onChange={(e) => updateField('nationalId', e.target.value)}
+                    placeholder="0012345678"
+                    className="clinical-input-focus w-full text-xs px-2.5 py-1.5 rounded-xl border border-slate-200/90 bg-slate-50/70 focus:bg-white font-mono tabular-nums transition-all duration-200"
+                    dir="ltr"
+                  />
+                </div>
+
+                {/* Age & Gender */}
+                <div className="flex gap-1.5">
+                  <div className="w-1/2">
+                    <label className="block text-[11px] font-bold text-slate-600 mb-1">سن</label>
+                    <input
+                      type="text"
+                      value={patientInfo.age}
+                      onChange={(e) => updateField('age', e.target.value)}
+                      placeholder="۴۲"
+                      className="clinical-input-focus w-full text-xs font-bold tabular-nums px-2 py-1.5 rounded-xl border border-slate-200/90 bg-slate-50/70 focus:bg-white text-center transition-all duration-200"
+                    />
+                  </div>
+                  <div className="w-1/2">
+                    <label className="block text-[11px] font-bold text-slate-600 mb-1">جنسیت</label>
+                    <select
+                      value={patientInfo.gender}
+                      onChange={(e) => updateField('gender', e.target.value as any)}
+                      className="clinical-input-focus w-full text-xs px-1.5 py-1.5 rounded-xl border border-slate-200/90 bg-slate-50/70 focus:bg-white font-bold transition-all duration-200 cursor-pointer"
+                    >
+                      <option value="female">زن (خانم)</option>
+                      <option value="male">مرد (آقا)</option>
+                      <option value="other">کودک/نامشخص</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Admission Number */}
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 mb-1">شماره پذیرش / کد تصویر</label>
+                  <input
+                    type="text"
+                    value={patientInfo.admissionNumber}
+                    onChange={(e) => updateField('admissionNumber', e.target.value)}
+                    placeholder="ADM-2026-904"
+                    className="clinical-input-focus w-full text-xs px-2.5 py-1.5 rounded-xl border border-slate-200/90 bg-slate-50/70 focus:bg-white font-mono tabular-nums transition-all duration-200"
+                    dir="ltr"
+                  />
+                </div>
 
             {/* Referring Physician (Searchable Combobox + Add to List + Sorted by Frequency) */}
             <div className="relative" ref={refContainerRef}>
@@ -649,8 +747,10 @@ export const PatientHeader: React.FC<PatientHeaderProps> = ({
                 </div>
               )}
             </div>
+              </div>
+            </div>
           </div>
-        )}
+        </div>
       </div>
     </div>
   );

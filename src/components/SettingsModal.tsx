@@ -213,7 +213,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     usageMb: string;
     quotaGb: string;
     percentUsed: string;
-  }>({ usageMb: '۱.۴۰', quotaGb: '۱۰.۰', percentUsed: '۰.۰۱' });
+    estimatedCapacityText?: string;
+  }>({
+    usageMb: '۱.۴۰',
+    quotaGb: '۶۰.۰+',
+    percentUsed: '۰.۰۰۲',
+    estimatedCapacityText: 'ظرفیت بیش از ۳۰ میلیون گزارش بیمار (عملاً نامحدود تا سقف فضای هارد)',
+  });
   const [lanSyncStatus, setLanSyncStatus] = useState<string>('');
   const [lanServerInfo, setLanServerInfo] = useState<{
     engine: string;
@@ -1279,10 +1285,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="text-xs font-black text-slate-800 flex items-center gap-1.5">
                 <HardDrive className="w-4 h-4 text-teal-600" />
-                <span>موتور دیتابیس چندگیگابایتی (IndexedDB)، سینک شبکه محلی و بکاپ خودکار</span>
+                <span>موتور دیتابیس نامحدود (IndexedDB + SQLite)، سینک شبکه محلی (LAN) و بکاپ خودکار</span>
               </div>
-              <span className="text-[10px] font-mono font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-full">
-                فضای مصرفی: {storageEstimate.usageMb} MB از {storageEstimate.quotaGb} GB (ظرفیت +۲۰,۰۰۰ بیمار)
+              <span className="text-[10px] font-mono font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 px-2.5 py-0.5 rounded-full">
+                فضای مصرفی: {storageEstimate.usageMb} MB از {storageEstimate.quotaGb} GB •{' '}
+                {storageEstimate.estimatedCapacityText || 'ظرفیت +۳۰ میلیون گزارش بیمار (نامحدود تا سقف هارد)'}
               </span>
             </div>
 

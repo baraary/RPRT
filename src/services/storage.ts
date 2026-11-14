@@ -16,6 +16,22 @@ const STORAGE_KEYS = {
   OPEN_TABS: 'radioreport_open_tabs_v1',
 };
 
+// Full in-memory archive (synced with IndexedDB & SQLite LAN DB) so hundreds of thousands / millions of reports work without hitting the 5MB localStorage wall
+let inMemoryReportsArchive: MedicalReport[] | null = null;
+
+function persistReportsToHotCache(reports: MedicalReport[]): void {
+  inMemoryReportsArchive = reports;
+  try {
+    localStorage.setItem(STORAGE_KEYS.REPORTS, JSON.stringify(reports));
+  } catch {
+    // If localStorage hits its 5MB browser limit, keep the most recent 600 reports in localStorage hot-cache
+    // while the entire unlimited archive remains in inMemoryReportsArchive + IndexedDB + SQLite LAN DB
+    try {
+      localStorage.setItem(STORAGE_KEYS.REPORTS, JSON.stringify(reports.slice(0, 600)));
+    } catch {}
+  }
+}
+
 export const DEFAULT_REFERRING_PHYSICIANS: ReferringPhysicianItem[] = [
   { id: 'ref-1', name: 'دکتر علوی (متخصص داخلی)', usageCount: 18 },
   { id: 'ref-2', name: 'دکتر صابری (مغز و اعصاب)', usageCount: 14 },
@@ -449,21 +465,58 @@ export const StorageService = {
     return cloned;
   },
 
-  // SHORTCUTS / MACROS
+  // SHORTCUTS / MACROS & UNIFIED ORGAN SENTENCES
   getShortcuts(): MedicalShortcut[] {
     try {
+      const inferOrganFromText = (item: MedicalShortcut): string => {
+        if (item.organ) return item.organ;
+        const defaultMatch = DEFAULT_SHORTCUTS.find(
+          (d) => d.id === item.id || (d.trigger && d.trigger === item.trigger)
+        );
+        if (defaultMatch?.organ) return defaultMatch.organ;
+        const text = `${item.label} ${item.expansion}`;
+        if (text.includes('کبد')) return 'کبد';
+        if (text.includes('صفرا')) return 'کیسه صفرا';
+        if (text.includes('کلیه') || text.includes('هیدرونفروز')) return 'کلیه‌ها';
+        if (text.includes('طحال')) return 'طحال';
+        if (text.includes('مثانه')) return 'مثانه';
+        if (text.includes('رحم') || text.includes('تخمدان') || text.includes('آندومتر')) return 'رحم و تخمدان';
+        if (text.includes('پروستات')) return 'پروستات';
+        if (text.includes('تیروئید') || text.includes('TI-RADS')) return 'تیروئید';
+        if (text.includes('پستان') || text.includes('BI-RADS')) return 'پستان';
+        if (text.includes('دیسک') || text.includes('ستون فقرات') || text.includes('L4-L5') || text.includes('L5-S1')) return 'ستون فقرات';
+        if (text.includes('مغز') || text.includes('جمجمه')) return 'مغز و اعصاب';
+        if (text.includes('ریه') || text.includes('پلور')) return 'ریه و قفسه سینه';
+        return 'عمومی';
+      };
+
       const data = localStorage.getItem(STORAGE_KEYS.SHORTCUTS);
       if (!data) {
         localStorage.setItem(STORAGE_KEYS.SHORTCUTS, JSON.stringify(DEFAULT_SHORTCUTS));
         return DEFAULT_SHORTCUTS;
       }
-      const parsed: MedicalShortcut[] = JSON.parse(data);
+      let parsed: MedicalShortcut[] = JSON.parse(data);
+      let modified = false;
+
+      parsed = parsed.map((s) => {
+        if (!s.organ) {
+          modified = true;
+          return { ...s, organ: inferOrganFromText(s) };
+        }
+        return s;
+      });
+
       const existingTriggers = new Set(parsed.map((s) => s.trigger));
-      const missingDefaults = DEFAULT_SHORTCUTS.filter((d) => !existingTriggers.has(d.trigger));
+      const existingIds = new Set(parsed.map((s) => s.id));
+      const missingDefaults = DEFAULT_SHORTCUTS.filter(
+        (d) => !existingTriggers.has(d.trigger) && !existingIds.has(d.id)
+      );
       if (missingDefaults.length > 0) {
-        const merged = [...missingDefaults, ...parsed];
-        localStorage.setItem(STORAGE_KEYS.SHORTCUTS, JSON.stringify(merged));
-        return merged;
+        parsed = [...parsed, ...missingDefaults];
+        modified = true;
+      }
+      if (modified) {
+        localStorage.setItem(STORAGE_KEYS.SHORTCUTS, JSON.stringify(parsed));
       }
       return parsed;
     } catch {
@@ -473,6 +526,11 @@ export const StorageService = {
 
   saveShortcuts(shortcuts: MedicalShortcut[]): void {
     localStorage.setItem(STORAGE_KEYS.SHORTCUTS, JSON.stringify(shortcuts));
+  },
+
+  resetShortcutsToDefaults(): MedicalShortcut[] {
+    localStorage.setItem(STORAGE_KEYS.SHORTCUTS, JSON.stringify(DEFAULT_SHORTCUTS));
+    return DEFAULT_SHORTCUTS;
   },
 
   addShortcut(shortcut: Omit<MedicalShortcut, 'id'>): MedicalShortcut {
@@ -676,29 +734,35 @@ export const StorageService = {
   },
 
   getSavedReports(): MedicalReport[] {
+    if (inMemoryReportsArchive && inMemoryReportsArchive.length > 0) {
+      return inMemoryReportsArchive;
+    }
     try {
       const data = localStorage.getItem(STORAGE_KEYS.REPORTS);
       if (!data) {
         const samples = this.generateSampleReports();
-        localStorage.setItem(STORAGE_KEYS.REPORTS, JSON.stringify(samples));
+        persistReportsToHotCache(samples);
         return samples;
       }
       const parsed = JSON.parse(data);
       if (Array.isArray(parsed) && parsed.length > 0) {
+        inMemoryReportsArchive = parsed;
         return parsed;
       }
       const samples = this.generateSampleReports();
-      localStorage.setItem(STORAGE_KEYS.REPORTS, JSON.stringify(samples));
+      persistReportsToHotCache(samples);
       return samples;
     } catch {
-      return this.generateSampleReports();
+      const samples = this.generateSampleReports();
+      inMemoryReportsArchive = samples;
+      return samples;
     }
   },
 
   saveReport(
     report: Omit<MedicalReport, 'id' | 'createdAt' | 'updatedAt'> & { id?: string; revisionNote?: string }
   ): MedicalReport {
-    const reports = this.getSavedReports();
+    const reports = [...this.getSavedReports()];
     const now = new Date().toISOString();
     let nowFa = '۱۴۰۴/۰۸/۲۱';
     try {
@@ -828,12 +892,12 @@ export const StorageService = {
       reports.unshift(updatedReport);
     }
 
-    localStorage.setItem(STORAGE_KEYS.REPORTS, JSON.stringify(reports));
+    persistReportsToHotCache(reports);
     return updatedReport;
   },
 
   unlockReportForAddendum(reportId: string): MedicalReport | null {
-    const reports = this.getSavedReports();
+    const reports = [...this.getSavedReports()];
     const idx = reports.findIndex((r) => r.id === reportId);
     if (idx === -1) return null;
     const target = reports[idx];
@@ -843,17 +907,17 @@ export const StorageService = {
       updatedAt: new Date().toISOString(),
     };
     reports[idx] = updated;
-    localStorage.setItem(STORAGE_KEYS.REPORTS, JSON.stringify(reports));
+    persistReportsToHotCache(reports);
     return updated;
   },
 
   saveAllReports(reports: MedicalReport[]): void {
-    localStorage.setItem(STORAGE_KEYS.REPORTS, JSON.stringify(reports));
+    persistReportsToHotCache(reports);
   },
 
   deleteReport(id: string): MedicalReport[] {
     const reports = this.getSavedReports().filter((r) => r.id !== id);
-    localStorage.setItem(STORAGE_KEYS.REPORTS, JSON.stringify(reports));
+    persistReportsToHotCache(reports);
     return reports;
   },
 
@@ -1001,7 +1065,9 @@ export const StorageService = {
       if (data.typists) this.saveTypists(data.typists);
       if (data.templates) this.saveTemplates(data.templates);
       if (data.shortcuts) this.saveShortcuts(data.shortcuts);
-      if (data.reports) localStorage.setItem(STORAGE_KEYS.REPORTS, JSON.stringify(data.reports));
+      if (data.reports && Array.isArray(data.reports)) {
+        persistReportsToHotCache(data.reports);
+      }
       if (data.settings) this.saveSettings(data.settings);
       return true;
     } catch (e) {

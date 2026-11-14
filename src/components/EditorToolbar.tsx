@@ -23,6 +23,9 @@ import {
   ZoomIn,
   ZoomOut,
   MoveVertical,
+  GripVertical,
+  ChevronUp,
+  SlidersHorizontal,
 } from 'lucide-react';
 
 interface EditorToolbarProps {
@@ -47,6 +50,7 @@ interface EditorToolbarProps {
   onChangeZoom?: (newZoom: number) => void;
   lineHeight?: number;
   onChangeLineHeight?: (lh: number) => void;
+  desktopMode?: boolean;
 }
 
 export const EditorToolbar: React.FC<EditorToolbarProps> = ({
@@ -71,6 +75,7 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
   onChangeZoom,
   lineHeight = 1.8,
   onChangeLineHeight,
+  desktopMode = false,
 }) => {
   const [showFindReplace, setShowFindReplace] = useState(false);
   const [findText, setFindText] = useState('');
@@ -79,13 +84,48 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
   const [hoverGrid, setHoverGrid] = useState<{ r: number; c: number }>({ r: 3, c: 3 });
   const [tableWithHeader, setTableWithHeader] = useState(true);
   const [showSymbolMenu, setShowSymbolMenu] = useState(false);
+  const [showMoreToolsMenu, setShowMoreToolsMenu] = useState(false);
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [showHighlightPicker, setShowHighlightPicker] = useState(false);
   const [showLineHeightMenu, setShowLineHeightMenu] = useState(false);
   const [activeTextColor, setActiveTextColor] = useState<string>('#0f172a');
   const [activeHighlightColor, setActiveHighlightColor] = useState<string>('#fef08a');
+  const [isFloatingCollapsed, setIsFloatingCollapsed] = useState(false);
+  const [floatingOffset, setFloatingOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const dragStartRef = React.useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
   const colorMenuRef = React.useRef<HTMLDivElement | null>(null);
   const lineHeightMenuRef = React.useRef<HTMLDivElement | null>(null);
+  const moreToolsMenuRef = React.useRef<HTMLDivElement | null>(null);
+
+  const handleStartDragFloatingToolbar = (e: React.MouseEvent) => {
+    if (!desktopMode) return;
+    e.preventDefault();
+    dragStartRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      origX: floatingOffset.x,
+      origY: floatingOffset.y,
+    };
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      if (!dragStartRef.current) return;
+      const dx = moveEvent.clientX - dragStartRef.current.startX;
+      const dy = moveEvent.clientY - dragStartRef.current.startY;
+      setFloatingOffset({
+        x: dragStartRef.current.origX + dx,
+        y: dragStartRef.current.origY + dy,
+      });
+    };
+
+    const handleMouseUp = () => {
+      dragStartRef.current = null;
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  };
 
   React.useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {
@@ -95,6 +135,9 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
       }
       if (lineHeightMenuRef.current && !lineHeightMenuRef.current.contains(e.target as Node)) {
         setShowLineHeightMenu(false);
+      }
+      if (moreToolsMenuRef.current && !moreToolsMenuRef.current.contains(e.target as Node)) {
+        setShowMoreToolsMenu(false);
       }
     };
     document.addEventListener('mousedown', handleOutsideClick);
@@ -176,12 +219,97 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
     e.preventDefault();
   };
 
+  if (desktopMode && isFloatingCollapsed) {
+    return (
+      <div
+        style={{
+          transform: `translate(${floatingOffset.x}px, ${floatingOffset.y}px)`,
+        }}
+        className="fixed top-20 left-1/2 -translate-x-1/2 z-40 no-print flex items-center gap-1 bg-slate-900/95 backdrop-blur-md text-white px-3 py-1.5 rounded-full shadow-2xl border border-teal-500/50 animate-scaleIn"
+      >
+        <div
+          onMouseDown={handleStartDragFloatingToolbar}
+          title="جابجایی نوار ابزار شناور در صفحه مانیتور"
+          className="cursor-move text-slate-400 hover:text-white px-0.5"
+        >
+          <GripVertical className="w-3.5 h-3.5" />
+        </div>
+        <button
+          type="button"
+          onClick={() => setIsFloatingCollapsed(false)}
+          className="inline-flex items-center gap-1.5 text-xs font-bold text-teal-300 hover:text-white cursor-pointer"
+          title="باز کردن نوار ابزار شناور ویرایشگر"
+        >
+          <SlidersHorizontal className="w-3.5 h-3.5" />
+          <span>نوار ابزار شناور ویرایشگر</span>
+          <ChevronDown className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    );
+  }
+
+  const hasOpenToolbarMenu =
+    showColorPicker ||
+    showHighlightPicker ||
+    showLineHeightMenu ||
+    showTableMenu ||
+    showMoreToolsMenu ||
+    showSymbolMenu;
+
   return (
     <div
       id="app-editor-toolbar"
-      className="bg-white border-b border-slate-200 shadow-2xs no-print"
+      style={
+        desktopMode
+          ? {
+              transform: `translate(${floatingOffset.x}px, ${floatingOffset.y}px)`,
+            }
+          : undefined
+      }
+      className={
+        desktopMode
+          ? 'fixed top-20 left-1/2 -translate-x-1/2 z-40 w-[min(96vw,1380px)] bg-white/95 backdrop-blur-md border-2 border-teal-500/40 rounded-2xl shadow-2xl no-print transition-shadow'
+          : `w-full max-w-[1680px] 2xl:max-w-[1840px] mx-auto px-4 sm:px-6 lg:px-8 2xl:px-10 pb-1 no-print relative ${
+              hasOpenToolbarMenu ? 'z-35' : 'z-24'
+            }`
+      }
     >
-      <div className="w-full max-w-[1680px] 2xl:max-w-[1840px] mx-auto px-4 sm:px-6 lg:px-8 2xl:px-10 py-1.5 flex flex-wrap items-center gap-1">
+      <div
+        className={
+          desktopMode
+            ? 'w-full'
+            : 'w-full bg-white/95 backdrop-blur-md border border-slate-200/90 rounded-2xl shadow-2xs transition-all duration-200'
+        }
+      >
+        <div
+          className={
+            desktopMode
+              ? 'w-full px-3 py-1.5 flex flex-wrap items-center gap-1'
+              : 'w-full px-3 py-1.5 flex flex-wrap items-center gap-1'
+          }
+        >
+        {/* Desktop Floating Drag Handle & Collapse Button */}
+        {desktopMode && (
+          <div className="flex items-center gap-1 border-l border-slate-200 pl-2 ml-1">
+            <div
+              onMouseDown={handleStartDragFloatingToolbar}
+              title="نگه دارید و نوار ابزار شناور را در هر نقطه مانیتور جابجا کنید"
+              className="p-1 rounded bg-teal-50 text-teal-700 hover:bg-teal-100 cursor-move flex items-center gap-1 text-[10px] font-bold select-none"
+            >
+              <GripVertical className="w-3.5 h-3.5" />
+              <span className="hidden xl:inline">شناور</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsFloatingCollapsed(true)}
+              title="جمع کردن نوار ابزار شناور برای فضای بیشتر"
+              className="p-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-900 cursor-pointer"
+            >
+              <ChevronUp className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
         {/* Undo / Redo */}
         <div className="flex items-center gap-0.5 border-l border-slate-200 pl-1.5 ml-1">
           <button
@@ -258,23 +386,7 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
           </select>
         </div>
 
-        {/* Heading Style Select */}
-        <div className="flex items-center border-l border-slate-200 pl-1.5 ml-1">
-          <select
-            onChange={(e) => onFormatBlock(e.target.value)}
-            className="text-xs py-1 px-2 rounded border border-slate-200 bg-slate-50 focus:border-teal-500 focus:outline-none"
-            defaultValue="p"
-            title="نوع پاراگراف / تیتر"
-          >
-            <option value="p">پاراگراف عادی</option>
-            <option value="h1">تیتر ۱ (اصلی)</option>
-            <option value="h2">تیتر ۲ (ارگان)</option>
-            <option value="h3">تیتر ۳ (زیربخش)</option>
-            <option value="blockquote">نقل قول / کادر تاکید</option>
-          </select>
-        </div>
-
-        {/* Bold, Italic, Underline, Strikethrough */}
+        {/* Bold, Italic, Underline (Primary Text Formatting) */}
         <div className="flex items-center gap-0.5 border-l border-slate-200 pl-1.5 ml-1">
           <button
             type="button"
@@ -303,15 +415,6 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
           >
             <Underline className="w-3.5 h-3.5" />
           </button>
-          <button
-            type="button"
-            onMouseDown={preventFocusLoss}
-            onClick={() => onExecCommand('strikeThrough')}
-            className="p-1.5 text-slate-700 hover:text-slate-900 hover:bg-slate-100 rounded transition-colors cursor-pointer"
-            title="خط روی کلمه"
-          >
-            <Strikethrough className="w-3.5 h-3.5" />
-          </button>
         </div>
 
         {/* Text Color & Highlight (Fixed Selection Preservation + Quick Apply) */}
@@ -324,6 +427,7 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
               onClick={() => {
                 setShowColorPicker((prev) => !prev);
                 setShowHighlightPicker(false);
+                setShowMoreToolsMenu(false);
               }}
               className="p-1.5 text-slate-700 hover:bg-slate-100 rounded flex flex-col items-center justify-center gap-0.5 cursor-pointer"
               title="انتخاب رنگ متن (ابتدا متن را انتخاب کنید)"
@@ -388,6 +492,7 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
               onClick={() => {
                 setShowHighlightPicker((prev) => !prev);
                 setShowColorPicker(false);
+                setShowMoreToolsMenu(false);
               }}
               className="p-1.5 text-slate-700 hover:bg-slate-100 rounded flex flex-col items-center justify-center gap-0.5 cursor-pointer"
               title="هایلایت کردن متن (ابتدا متن را انتخاب کنید)"
@@ -453,70 +558,56 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
           </div>
         </div>
 
-        {/* RTL / LTR Direction Switcher (Vital for bilingual medical reports) */}
+        {/* Text Alignments + RTL/LTR Direction Switcher */}
         <div className="flex items-center gap-0.5 border-l border-slate-200 pl-1.5 ml-1">
           <button
             type="button"
             onMouseDown={preventFocusLoss}
+            onClick={() => onExecCommand('justifyRight')}
+            className="p-1.5 text-slate-700 hover:bg-slate-100 rounded cursor-pointer"
+            title="راست‌چین"
+          >
+            <AlignRight className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onMouseDown={preventFocusLoss}
+            onClick={() => onExecCommand('justifyCenter')}
+            className="p-1.5 text-slate-700 hover:bg-slate-100 rounded cursor-pointer"
+            title="وسط‌چین"
+          >
+            <AlignCenter className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onMouseDown={preventFocusLoss}
+            onClick={() => onExecCommand('justifyLeft')}
+            className="p-1.5 text-slate-700 hover:bg-slate-100 rounded cursor-pointer"
+            title="چپ‌چین"
+          >
+            <AlignLeft className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onMouseDown={preventFocusLoss}
+            onClick={() => onExecCommand('justifyFull')}
+            className="p-1.5 text-slate-700 hover:bg-slate-100 rounded cursor-pointer"
+            title="تراز دوطرفه (Justify)"
+          >
+            <AlignJustify className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onMouseDown={preventFocusLoss}
             onClick={onToggleDirection}
-            className={`px-2 py-1 text-xs font-bold rounded flex items-center gap-1 transition-colors cursor-pointer ${
+            className={`px-1.5 py-0.5 mr-0.5 text-[11px] font-bold rounded flex items-center gap-1 transition-colors cursor-pointer ${
               activeDirection === 'rtl'
                 ? 'bg-teal-50 text-teal-700 border border-teal-200'
                 : 'bg-slate-100 text-slate-700 border border-slate-200'
             }`}
             title="تغییر جهت نوشتار (راست‌به‌چپ فارسی / چپ‌به‌راست انگلیسی)"
           >
-            <span>{activeDirection === 'rtl' ? 'فارسی (RTL)' : 'انگلیسی (LTR)'}</span>
-          </button>
-        </div>
-
-        {/* Text Alignments */}
-        <div className="flex items-center gap-0.5 border-l border-slate-200 pl-1.5 ml-1">
-          <button
-            onClick={() => onExecCommand('justifyRight')}
-            className="p-1.5 text-slate-700 hover:bg-slate-100 rounded"
-            title="راست‌چین"
-          >
-            <AlignRight className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => onExecCommand('justifyCenter')}
-            className="p-1.5 text-slate-700 hover:bg-slate-100 rounded"
-            title="وسط‌چین"
-          >
-            <AlignCenter className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => onExecCommand('justifyLeft')}
-            className="p-1.5 text-slate-700 hover:bg-slate-100 rounded"
-            title="چپ‌چین"
-          >
-            <AlignLeft className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => onExecCommand('justifyFull')}
-            className="p-1.5 text-slate-700 hover:bg-slate-100 rounded"
-            title="تراز دوطرفه (Justify)"
-          >
-            <AlignJustify className="w-3.5 h-3.5" />
-          </button>
-        </div>
-
-        {/* Lists */}
-        <div className="flex items-center gap-0.5 border-l border-slate-200 pl-1.5 ml-1">
-          <button
-            onClick={() => onExecCommand('insertUnorderedList')}
-            className="p-1.5 text-slate-700 hover:bg-slate-100 rounded"
-            title="لیست بالت‌دار"
-          >
-            <List className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => onExecCommand('insertOrderedList')}
-            className="p-1.5 text-slate-700 hover:bg-slate-100 rounded"
-            title="لیست شماره‌دار"
-          >
-            <ListOrdered className="w-3.5 h-3.5" />
+            <span>{activeDirection === 'rtl' ? 'RTL' : 'LTR'}</span>
           </button>
         </div>
 
@@ -529,6 +620,7 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
               setShowLineHeightMenu((prev) => !prev);
               setShowTableMenu(false);
               setShowSymbolMenu(false);
+              setShowMoreToolsMenu(false);
               setShowColorPicker(false);
               setShowHighlightPicker(false);
             }}
@@ -594,6 +686,7 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
             onClick={() => {
               setShowTableMenu(!showTableMenu);
               setShowSymbolMenu(false);
+              setShowMoreToolsMenu(false);
               setShowColorPicker(false);
               setShowHighlightPicker(false);
             }}
@@ -694,57 +787,165 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
           )}
         </div>
 
-        {/* Medical Symbols Dropdown */}
-        <div className="relative border-l border-slate-200 pl-1.5 ml-1">
+        {/* Item 1: Consolidated "More Tools" (ابزارهای بیشتر) Popover Menu */}
+        <div ref={moreToolsMenuRef} className="relative border-l border-slate-200 pl-1.5 ml-1">
           <button
-            onClick={() => setShowSymbolMenu(!showSymbolMenu)}
-            className="p-1.5 text-slate-700 hover:bg-slate-100 rounded text-xs font-mono font-bold"
-            title="درج نمادهای پزشکی (قطر Ø، انحراف ±، سانتی‌متر و...)"
+            type="button"
+            onMouseDown={preventFocusLoss}
+            onClick={() => {
+              setShowMoreToolsMenu((prev) => !prev);
+              setShowTableMenu(false);
+              setShowLineHeightMenu(false);
+              setShowColorPicker(false);
+              setShowHighlightPicker(false);
+            }}
+            className={`px-2 py-1 rounded-lg flex items-center gap-1 text-xs font-bold border transition-all cursor-pointer ${
+              showMoreToolsMenu || showFindReplace
+                ? 'bg-teal-50 text-teal-800 border-teal-300 shadow-2xs'
+                : 'text-slate-700 hover:bg-slate-100 border-transparent hover:border-slate-200'
+            }`}
+            title="ابزارهای تکمیلی: تیتربندی، لیست‌ها، نمادهای پزشکی (Ø±)، جستجو و جایگزینی و حذف فرمت"
           >
-            Ø±
+            <span>ابزارهای بیشتر</span>
+            <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${showMoreToolsMenu ? 'rotate-180 text-teal-700' : 'text-slate-400'}`} />
           </button>
-          {showSymbolMenu && (
-            <div className="absolute right-0 mt-1 w-56 bg-white border border-slate-200 rounded-xl shadow-lg p-2 z-50">
-              <div className="font-bold text-slate-700 text-xs mb-1.5 pb-1 border-b border-slate-100">
-                نمادها و واحدهای پرتکرار رادیولوژی
+
+          {showMoreToolsMenu && (
+            <div
+              onMouseDown={preventFocusLoss}
+              className="absolute right-0 mt-1.5 w-80 bg-white border border-slate-200 rounded-2xl shadow-2xl p-3 z-50 text-xs space-y-3 animate-scaleIn"
+            >
+              {/* 1. Paragraph & Heading Block Style */}
+              <div>
+                <div className="font-black text-slate-700 text-[11px] mb-1.5">
+                  ۱. قالب پاراگراف و تیتربندی
+                </div>
+                <div className="grid grid-cols-3 gap-1">
+                  {[
+                    { val: 'p', label: 'متن عادی' },
+                    { val: 'h1', label: 'تیتر ۱ (اصلی)' },
+                    { val: 'h2', label: 'تیتر ۲ (ارگان)' },
+                    { val: 'h3', label: 'تیتر ۳ (زیربخش)' },
+                    { val: 'blockquote', label: 'کادر تاکید' },
+                  ].map((blk) => (
+                    <button
+                      key={blk.val}
+                      type="button"
+                      onMouseDown={preventFocusLoss}
+                      onClick={() => {
+                        onFormatBlock(blk.val);
+                        setShowMoreToolsMenu(false);
+                      }}
+                      className="px-2 py-1.5 rounded-lg bg-slate-50 hover:bg-teal-50 text-slate-700 hover:text-teal-900 border border-slate-200/80 hover:border-teal-300 font-bold text-[11px] transition-colors cursor-pointer"
+                    >
+                      {blk.label}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div className="grid grid-cols-4 gap-1">
-                {medicalSymbols.map((item) => (
+
+              {/* 2. Lists, Strikethrough & Clear Formatting */}
+              <div className="pt-2 border-t border-slate-100">
+                <div className="font-black text-slate-700 text-[11px] mb-1.5">
+                  ۲. لیست‌ها و ویرایش تکمیلی
+                </div>
+                <div className="grid grid-cols-2 gap-1.5">
                   <button
-                    key={item.sym}
+                    type="button"
+                    onMouseDown={preventFocusLoss}
                     onClick={() => {
-                      onInsertSymbol(item.sym);
-                      setShowSymbolMenu(false);
+                      onExecCommand('insertUnorderedList');
+                      setShowMoreToolsMenu(false);
                     }}
-                    className="p-1.5 hover:bg-teal-50 hover:text-teal-800 rounded border border-slate-100 text-xs font-mono font-bold flex items-center justify-center transition-colors"
-                    title={item.name}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold border border-slate-200/80 transition-colors cursor-pointer"
                   >
-                    {item.sym}
+                    <List className="w-3.5 h-3.5 text-teal-600" />
+                    <span>لیست بالت‌دار</span>
                   </button>
-                ))}
+                  <button
+                    type="button"
+                    onMouseDown={preventFocusLoss}
+                    onClick={() => {
+                      onExecCommand('insertOrderedList');
+                      setShowMoreToolsMenu(false);
+                    }}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold border border-slate-200/80 transition-colors cursor-pointer"
+                  >
+                    <ListOrdered className="w-3.5 h-3.5 text-teal-600" />
+                    <span>لیست شماره‌دار</span>
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={preventFocusLoss}
+                    onClick={() => {
+                      onExecCommand('strikeThrough');
+                      setShowMoreToolsMenu(false);
+                    }}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold border border-slate-200/80 transition-colors cursor-pointer"
+                  >
+                    <Strikethrough className="w-3.5 h-3.5 text-slate-600" />
+                    <span>خط روی کلمه</span>
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={preventFocusLoss}
+                    onClick={() => {
+                      onExecCommand('removeFormat');
+                      setShowMoreToolsMenu(false);
+                    }}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-rose-50/70 hover:bg-rose-100 text-rose-800 font-bold border border-rose-200/80 transition-colors cursor-pointer"
+                  >
+                    <RemoveFormatting className="w-3.5 h-3.5 text-rose-600" />
+                    <span>حذف فرمت اضافی</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* 3. Radiology Symbols & Units */}
+              <div className="pt-2 border-t border-slate-100">
+                <div className="font-black text-slate-700 text-[11px] mb-1.5 flex items-center justify-between">
+                  <span>۳. درج سریع نمادها و واحدهای رادیولوژی</span>
+                  <span className="font-mono text-[10px] text-teal-700">Ø ± mm cm</span>
+                </div>
+                <div className="grid grid-cols-5 gap-1">
+                  {medicalSymbols.map((item) => (
+                    <button
+                      key={item.sym}
+                      type="button"
+                      onMouseDown={preventFocusLoss}
+                      onClick={() => {
+                        onInsertSymbol(item.sym);
+                        setShowMoreToolsMenu(false);
+                      }}
+                      className="py-1.5 px-1 hover:bg-teal-50 hover:text-teal-800 bg-slate-50 rounded-lg border border-slate-200/80 hover:border-teal-300 text-xs font-mono font-bold flex items-center justify-center transition-colors cursor-pointer"
+                      title={item.name}
+                    >
+                      {item.sym}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 4. Find & Replace Toggle */}
+              <div className="pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowFindReplace((prev) => !prev);
+                    setShowMoreToolsMenu(false);
+                  }}
+                  className={`w-full py-2 px-3 rounded-xl font-bold flex items-center justify-center gap-2 border transition-colors cursor-pointer ${
+                    showFindReplace
+                      ? 'bg-teal-600 text-white border-teal-600'
+                      : 'bg-slate-100 hover:bg-teal-50 text-slate-800 hover:text-teal-900 border-slate-200'
+                  }`}
+                >
+                  <Search className="w-3.5 h-3.5" />
+                  <span>{showFindReplace ? 'بستن نوار جستجو و جایگزینی' : 'جستجو و جایگزینی کلمات در متن گزارش'}</span>
+                </button>
               </div>
             </div>
           )}
-        </div>
-
-        {/* Find & Replace Toggle */}
-        <div className="flex items-center gap-0.5 border-l border-slate-200 pl-1.5 ml-1">
-          <button
-            onClick={() => setShowFindReplace(!showFindReplace)}
-            className={`p-1.5 rounded transition-colors ${
-              showFindReplace ? 'bg-teal-100 text-teal-800' : 'text-slate-700 hover:bg-slate-100'
-            }`}
-            title="جستجو و جایگزینی کلمات در گزارش"
-          >
-            <Search className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => onExecCommand('removeFormat')}
-            className="p-1.5 text-slate-700 hover:bg-slate-100 rounded"
-            title="حذف قالب‌بندی اضافی (Clear Formatting)"
-          >
-            <RemoveFormatting className="w-3.5 h-3.5" />
-          </button>
         </div>
 
         {/* Editor Zoom Out / Zoom In Controls (کوچک‌نمایی و بزرگ‌نمایی متن ویرایشگر) */}
@@ -801,49 +1002,50 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
           <span>•</span>
           <span>{charCount} نویسه</span>
         </div>
-      </div>
-
-      {/* Find and Replace Bar (Expandable) */}
-      {showFindReplace && (
-        <div className="bg-slate-50 border-t border-slate-200 px-4 sm:px-6 lg:px-8 py-2 flex flex-wrap items-center gap-2">
-          <div className="text-xs font-bold text-slate-700">جستجو:</div>
-          <input
-            type="text"
-            value={findText}
-            onChange={(e) => setFindText(e.target.value)}
-            placeholder="کلمه مورد نظر..."
-            className="text-xs px-2.5 py-1 rounded border border-slate-200 bg-white w-40 focus:border-teal-500"
-          />
-          <div className="text-xs font-bold text-slate-700">جایگزینی با:</div>
-          <input
-            type="text"
-            value={replaceText}
-            onChange={(e) => setReplaceText(e.target.value)}
-            placeholder="کلمه جایگزین..."
-            className="text-xs px-2.5 py-1 rounded border border-slate-200 bg-white w-40 focus:border-teal-500"
-          />
-          <button
-            onClick={() => onFindReplace(findText, replaceText, false)}
-            disabled={!findText}
-            className="text-xs px-2.5 py-1 bg-white hover:bg-slate-100 border border-slate-200 rounded font-medium disabled:opacity-50"
-          >
-            جایگزینی بعدی
-          </button>
-          <button
-            onClick={() => onFindReplace(findText, replaceText, true)}
-            disabled={!findText}
-            className="text-xs px-2.5 py-1 bg-teal-600 hover:bg-teal-700 text-white rounded font-medium disabled:opacity-50"
-          >
-            جایگزینی همه
-          </button>
-          <button
-            onClick={() => setShowFindReplace(false)}
-            className="text-xs text-slate-600 hover:text-slate-900 mr-2"
-          >
-            بستن
-          </button>
         </div>
-      )}
+
+        {/* Find and Replace Bar (Expandable) */}
+        {showFindReplace && (
+          <div className="bg-slate-50/90 border-t border-slate-200/80 rounded-b-2xl px-3.5 py-2 flex flex-wrap items-center gap-2">
+            <div className="text-xs font-bold text-slate-700">جستجو:</div>
+            <input
+              type="text"
+              value={findText}
+              onChange={(e) => setFindText(e.target.value)}
+              placeholder="کلمه مورد نظر..."
+              className="text-xs px-2.5 py-1 rounded-xl border border-slate-200 bg-white w-40 focus:border-teal-500 focus:outline-none"
+            />
+            <div className="text-xs font-bold text-slate-700">جایگزینی با:</div>
+            <input
+              type="text"
+              value={replaceText}
+              onChange={(e) => setReplaceText(e.target.value)}
+              placeholder="کلمه جایگزین..."
+              className="text-xs px-2.5 py-1 rounded-xl border border-slate-200 bg-white w-40 focus:border-teal-500 focus:outline-none"
+            />
+            <button
+              onClick={() => onFindReplace(findText, replaceText, false)}
+              disabled={!findText}
+              className="text-xs px-2.5 py-1 bg-white hover:bg-slate-100 border border-slate-200 rounded-xl font-medium disabled:opacity-50 cursor-pointer"
+            >
+              جایگزینی بعدی
+            </button>
+            <button
+              onClick={() => onFindReplace(findText, replaceText, true)}
+              disabled={!findText}
+              className="text-xs px-2.5 py-1 bg-teal-600 hover:bg-teal-700 text-white rounded-xl font-medium disabled:opacity-50 cursor-pointer"
+            >
+              جایگزینی همه
+            </button>
+            <button
+              onClick={() => setShowFindReplace(false)}
+              className="text-xs text-slate-600 hover:text-slate-900 mr-2 cursor-pointer"
+            >
+              بستن
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 };

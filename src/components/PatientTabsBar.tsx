@@ -12,6 +12,7 @@ import {
   Pencil,
   Check,
   LayoutGrid,
+  Search,
 } from 'lucide-react';
 
 interface PatientTabsBarProps {
@@ -23,6 +24,7 @@ interface PatientTabsBarProps {
   onCloseTab: (tabId: string, e: React.MouseEvent) => void;
   onUpdateTabPatientName?: (tabId: string, newName: string) => void;
   onOpenReports?: () => void;
+  onOpenCommandPalette?: () => void;
   reportsCount?: number;
 }
 
@@ -41,7 +43,7 @@ const MODALITY_BADGE: Record<
   sonography: {
     label: 'سونو',
     dotColor: 'bg-sky-400',
-    activeTabCls: 'bg-sky-600 text-white border-sky-400 shadow-xs shadow-sky-600/20',
+    activeTabCls: 'bg-sky-600 text-white border-sky-400 shadow-sm shadow-sky-600/25 -translate-y-[1px]',
     activeBadgeCls: 'bg-sky-800/85 text-sky-100',
     inactiveBadgeCls: 'bg-sky-950/90 text-sky-300 border border-sky-800/60',
     plusBtnCls: 'bg-sky-500/25 hover:bg-sky-600 text-sky-300 hover:text-white border-sky-500/40',
@@ -50,7 +52,7 @@ const MODALITY_BADGE: Record<
   mri: {
     label: 'ام‌آر‌آی',
     dotColor: 'bg-indigo-400',
-    activeTabCls: 'bg-indigo-600 text-white border-indigo-400 shadow-xs shadow-indigo-600/20',
+    activeTabCls: 'bg-indigo-600 text-white border-indigo-400 shadow-sm shadow-indigo-600/25 -translate-y-[1px]',
     activeBadgeCls: 'bg-indigo-800/85 text-indigo-100',
     inactiveBadgeCls: 'bg-indigo-950/90 text-indigo-300 border border-indigo-800/60',
     plusBtnCls: 'bg-indigo-500/25 hover:bg-indigo-600 text-indigo-300 hover:text-white border-indigo-500/40',
@@ -59,7 +61,7 @@ const MODALITY_BADGE: Record<
   ct: {
     label: 'سی‌تی',
     dotColor: 'bg-emerald-400',
-    activeTabCls: 'bg-emerald-600 text-white border-emerald-400 shadow-xs shadow-emerald-600/20',
+    activeTabCls: 'bg-emerald-600 text-white border-emerald-400 shadow-sm shadow-emerald-600/25 -translate-y-[1px]',
     activeBadgeCls: 'bg-emerald-800/85 text-emerald-100',
     inactiveBadgeCls: 'bg-emerald-950/90 text-emerald-300 border border-emerald-800/60',
     plusBtnCls: 'bg-emerald-500/25 hover:bg-emerald-600 text-emerald-300 hover:text-white border-emerald-500/40',
@@ -76,6 +78,7 @@ export const PatientTabsBar: React.FC<PatientTabsBarProps> = ({
   onCloseTab,
   onUpdateTabPatientName,
   onOpenReports,
+  onOpenCommandPalette,
   reportsCount = 0,
 }) => {
   const tabsScrollRef = useRef<HTMLDivElement | null>(null);
@@ -119,17 +122,17 @@ export const PatientTabsBar: React.FC<PatientTabsBarProps> = ({
     <div
       id="app-patient-tabs-bar"
       style={{ top: 'var(--navbar-height, 102px)' }}
-      className="sticky z-30 w-full bg-slate-100/95 backdrop-blur-md py-0.5 no-print select-none transition-colors duration-200"
+      className="sticky z-30 w-full pt-1.5 no-print select-none transition-all duration-300"
     >
       <div className="w-full max-w-[1680px] 2xl:max-w-[1840px] mx-auto px-4 sm:px-6 lg:px-8 2xl:px-10">
-        <div className="w-full bg-slate-900 text-slate-200 border border-slate-800 rounded-lg px-2 py-0.5 flex items-center justify-between gap-1.5 shadow-2xs">
+        <div className="w-full bg-slate-900/95 backdrop-blur-md text-slate-200 border border-b-0 border-slate-800 rounded-t-2xl px-2.5 py-1 flex items-center justify-between gap-1.5 shadow-xs">
           {/* Scroll Right Button (For Hospital Mice without Horizontal Scroll) */}
           {!isMultiLineWrap && tabs.length > 2 && (
             <button
               type="button"
               onClick={() => scrollTabsBy('right')}
               title="اسکرول تب‌ها به راست (با چرخ موس هم می‌توانید روی تب‌ها اسکرول کنید)"
-              className="w-6 h-6 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 flex items-center justify-center shrink-0 cursor-pointer active:scale-95 transition-colors"
+              className="w-6.5 h-6.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 flex items-center justify-center shrink-0 cursor-pointer active:scale-95 transition-all"
             >
               <ChevronRight className="w-3.5 h-3.5" />
             </button>
@@ -139,7 +142,7 @@ export const PatientTabsBar: React.FC<PatientTabsBarProps> = ({
           <div
             ref={tabsScrollRef}
             onWheel={handleWheelHorizontalScroll}
-            className={`flex items-center gap-1 flex-1 py-0.5 ${
+            className={`flex items-center gap-1.5 flex-1 py-0.5 ${
               isMultiLineWrap
                 ? 'flex-wrap'
                 : 'overflow-x-auto no-scrollbar scroll-smooth'
@@ -157,10 +160,10 @@ export const PatientTabsBar: React.FC<PatientTabsBarProps> = ({
                   onClick={() => onSelectTab(tab.id)}
                   onDoubleClick={(e) => startEditingTabName(tab, e)}
                   title={`کلید میانبر: Alt+${idx + 1} • دبل‌کلیک یا کلیک روی مداد برای نوشتن نام بیمار`}
-                  className={`group h-6.5 inline-flex items-center gap-1.5 px-2 rounded-md text-[11px] font-bold transition-all duration-200 cursor-pointer shrink-0 border ${
+                  className={`group h-7 inline-flex items-center gap-1.5 px-2.5 rounded-xl text-[11px] font-bold transition-all duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] cursor-pointer shrink-0 border ${
                     isActive
                       ? modInfo.activeTabCls
-                      : 'bg-slate-800/90 hover:bg-slate-800 text-slate-300 border-slate-700/80'
+                      : 'bg-slate-800/85 hover:bg-slate-800 text-slate-300 border-slate-700/80 hover:-translate-y-[0.5px]'
                   }`}
                 >
                   {/* Modality Color Dot Only (No Modality Text) */}
@@ -266,25 +269,25 @@ export const PatientTabsBar: React.FC<PatientTabsBarProps> = ({
               );
             })}
 
-            {/* Add New Patient Tab Button (Ultra-Slim h-6.5 w-6.5, Matched to Active Modality Color) */}
+            {/* Add New Patient Tab Button */}
             <button
               type="button"
               onClick={onAddNewTab}
               title="باز کردن تب بیمار جدید و انتخاب قالب‌های همین مدالیته (Alt+N)"
-              className={`w-6.5 h-6.5 flex items-center justify-center rounded-md border transition-all duration-200 cursor-pointer shrink-0 active:scale-95 ${activeModBadge.plusBtnCls}`}
+              className={`w-7 h-7 flex items-center justify-center rounded-xl border transition-all duration-200 cursor-pointer shrink-0 active:scale-95 ${activeModBadge.plusBtnCls}`}
             >
               <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
             </button>
           </div>
 
-          {/* Scroll Left Button + Multi-line Wrap Toggle (For Hospital Mice without Horizontal Scroll) */}
+          {/* Left Actions: Scroll Left + Multi-line Wrap + Spotlight Command (Ctrl+K) + Duplicate + Archive */}
           <div className="flex items-center gap-1 shrink-0">
             {!isMultiLineWrap && tabs.length > 2 && (
               <button
                 type="button"
                 onClick={() => scrollTabsBy('left')}
                 title="اسکرول تب‌ها به چپ (با چرخ موس هم می‌توانید روی تب‌ها اسکرول کنید)"
-                className="w-6 h-6 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 flex items-center justify-center shrink-0 cursor-pointer active:scale-95 transition-colors"
+                className="w-6.5 h-6.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 flex items-center justify-center shrink-0 cursor-pointer active:scale-95 transition-colors"
               >
                 <ChevronLeft className="w-3.5 h-3.5" />
               </button>
@@ -299,7 +302,7 @@ export const PatientTabsBar: React.FC<PatientTabsBarProps> = ({
                     ? 'بازگشت به نمایش تک‌خطی تب‌ها'
                     : 'نمایش چندخطی همه تب‌های باز (بدون نیاز به اسکرول افقی)'
                 }
-                className={`h-6 px-1.5 rounded-md border text-[10px] font-bold inline-flex items-center gap-1 transition-colors cursor-pointer shrink-0 ${
+                className={`h-6.5 px-2 rounded-lg border text-[10px] font-bold inline-flex items-center gap-1 transition-all cursor-pointer shrink-0 ${
                   isMultiLineWrap
                     ? 'bg-teal-600 text-white border-teal-500'
                     : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
@@ -310,11 +313,26 @@ export const PatientTabsBar: React.FC<PatientTabsBarProps> = ({
               </button>
             )}
 
+            {onOpenCommandPalette && (
+              <button
+                type="button"
+                onClick={onOpenCommandPalette}
+                title="جستجوگر سریع قالب‌ها، تب‌ها و دستورات (Ctrl+K)"
+                className="h-6.5 inline-flex items-center justify-center gap-1 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-[10.5px] font-semibold transition-all duration-200 active:scale-95 cursor-pointer whitespace-nowrap"
+              >
+                <Search className="w-3 h-3 text-teal-400" />
+                <span className="hidden lg:inline">فرمان سریع</span>
+                <kbd className="text-[9px] font-mono bg-slate-950/70 text-slate-300 px-1 rounded">
+                  Ctrl+K
+                </kbd>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={onDuplicateActiveTab}
               title="کپی کردن گزارش و مشخصات تب فعلی در یک تب جدید"
-              className="h-6 inline-flex items-center justify-center gap-1 px-2 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-[10.5px] font-semibold transition-all duration-200 active:scale-95 cursor-pointer whitespace-nowrap"
+              className="h-6.5 inline-flex items-center justify-center gap-1 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-[10.5px] font-semibold transition-all duration-200 active:scale-95 cursor-pointer whitespace-nowrap"
             >
               <Copy className={`w-3 h-3 transition-colors ${activeModBadge.copyIconCls}`} />
               <span className="hidden md:inline">کپی در تب جدید</span>
@@ -325,7 +343,7 @@ export const PatientTabsBar: React.FC<PatientTabsBarProps> = ({
                 type="button"
                 onClick={onOpenReports}
                 title="مشاهده آرشیو گزارش‌های ذخیره‌شده بیماران و تاریخچه نسخه‌ها"
-                className="h-6 inline-flex items-center justify-center gap-1 px-2 rounded-md bg-slate-800 hover:bg-teal-700 text-slate-200 hover:text-white border border-slate-700 hover:border-teal-500 text-[10.5px] font-bold transition-all duration-200 active:scale-95 cursor-pointer whitespace-nowrap"
+                className="h-6.5 inline-flex items-center justify-center gap-1 px-2.5 rounded-lg bg-slate-800 hover:bg-teal-700 text-slate-200 hover:text-white border border-slate-700 hover:border-teal-500 text-[10.5px] font-bold transition-all duration-200 active:scale-95 cursor-pointer whitespace-nowrap"
               >
                 <FolderOpen className="w-3 h-3 text-teal-400 shrink-0" />
                 <span>آرشیو بیماران</span>

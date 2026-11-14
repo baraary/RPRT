@@ -45,6 +45,7 @@ export interface MedicalShortcut {
   expansion: string; // متنی که جایگزین می‌شود
   category: 'general' | 'normal' | 'pathology' | 'impression' | 'recommendation';
   modality?: Modality | 'all';
+  organ?: string; // نام عضو مربوطه (مثلاً: 'کبد'، 'کیسه صفرا'، 'کلیه‌ها' و ...) برای ادغام با انتخابگر وضعیت اعضا
   hotkey?: string; // e.g., "Alt+T", "Alt+M", "Ctrl+Shift+1"
   targetTemplateId?: string; // در صورت اتصال کلید میانبر به یک قالب خاص آماده
   isAutocorrect?: boolean; // true if plain word autocorrect without dot

@@ -9,7 +9,6 @@ import {
   Plus,
   Trash2,
   Check,
-  Pin,
   BookmarkPlus,
 } from 'lucide-react';
 
@@ -25,8 +24,7 @@ interface TemplateDrawerProps {
   onAddAsNewStudy?: (template: MedicalTemplate) => void;
   onCloneTemplate: (template: MedicalTemplate) => void;
   onDeleteTemplate: (templateId: string) => void;
-  onTogglePinTemplate?: (templateId: string) => void;
-  onQuickSaveCurrentAsTemplate?: (title: string, doctorId: string, pin: boolean) => void;
+  onQuickSaveCurrentAsTemplate?: (title: string, doctorId: string, pin?: boolean) => void;
   defaultSuggestedTitle?: string;
 }
 
@@ -42,7 +40,6 @@ export const TemplateDrawer: React.FC<TemplateDrawerProps> = ({
   onAddAsNewStudy,
   onCloneTemplate,
   onDeleteTemplate,
-  onTogglePinTemplate,
   onQuickSaveCurrentAsTemplate,
   defaultSuggestedTitle = '',
 }) => {
@@ -55,23 +52,42 @@ export const TemplateDrawer: React.FC<TemplateDrawerProps> = ({
   const [showInlineSaveBox, setShowInlineSaveBox] = useState(false);
   const [inlineTitle, setInlineTitle] = useState('');
   const [inlineDoctorId, setInlineDoctorId] = useState(activeDoctorId);
-  const [inlinePin, setInlinePin] = useState(true);
+
+  // Two-way smooth enter/exit drawer animation state
+  const [rendered, setRendered] = useState(false);
+  const [isClosing, setIsClosing] = useState(false);
 
   // Sync modality filter whenever drawer opens or active modality changes
   useEffect(() => {
     if (isOpen) {
+      setRendered(true);
+      setIsClosing(false);
       setSelectedModalityFilter(modality);
       setInlineDoctorId(activeDoctorId);
       setInlineTitle(defaultSuggestedTitle);
+    } else if (rendered) {
+      setIsClosing(true);
+      const timer = setTimeout(() => {
+        setRendered(false);
+        setIsClosing(false);
+      }, 240);
+      return () => clearTimeout(timer);
     }
-  }, [modality, isOpen, activeDoctorId, defaultSuggestedTitle]);
+  }, [modality, isOpen, activeDoctorId, defaultSuggestedTitle, rendered]);
 
-  if (!isOpen) return null;
+  const handleSmoothClose = () => {
+    setIsClosing(true);
+    setTimeout(() => {
+      onClose();
+    }, 220);
+  };
+
+  if (!rendered) return null;
 
   const handleInlineSaveSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!inlineTitle.trim() || !onQuickSaveCurrentAsTemplate) return;
-    onQuickSaveCurrentAsTemplate(inlineTitle.trim(), inlineDoctorId, inlinePin);
+    onQuickSaveCurrentAsTemplate(inlineTitle.trim(), inlineDoctorId, false);
     setInlineTitle('');
     setShowInlineSaveBox(false);
   };
@@ -101,18 +117,26 @@ export const TemplateDrawer: React.FC<TemplateDrawerProps> = ({
       if (sortBy === 'alphabetical') {
         return a.title.localeCompare(b.title, 'fa');
       }
-      // Default: sort by usageCount descending, then pinned status, then Persian alphabetical
       const countDiff = (b.usageCount || 0) - (a.usageCount || 0);
       if (countDiff !== 0) return countDiff;
-      if (Boolean(b.isPinned) !== Boolean(a.isPinned)) {
-        return b.isPinned ? 1 : -1;
-      }
       return a.title.localeCompare(b.title, 'fa');
     });
 
   return (
-    <div className="fixed inset-0 z-50 overflow-hidden bg-slate-900/50 backdrop-blur-xs flex justify-end">
-      <div className="bg-white w-full max-w-xl h-full shadow-2xl flex flex-col animate-slideLeft">
+    <div
+      onClick={handleSmoothClose}
+      className={`fixed inset-0 z-[80] overflow-hidden flex justify-end transition-all duration-250 ${
+        isClosing
+          ? 'bg-slate-900/0 backdrop-blur-none opacity-0'
+          : 'bg-slate-900/50 backdrop-blur-xs opacity-100'
+      }`}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className={`bg-white w-full max-w-xl h-full shadow-2xl flex flex-col transition-all duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+          isClosing ? '-translate-x-full opacity-0' : 'translate-x-0 opacity-100 animate-slideLeft'
+        }`}
+      >
         {/* Header */}
         <div className="p-4 sm:p-5 border-b border-slate-200 bg-slate-900 text-white flex items-start justify-between gap-3 shrink-0">
           <div className="flex items-center gap-2 min-w-0">
@@ -126,13 +150,13 @@ export const TemplateDrawer: React.FC<TemplateDrawerProps> = ({
               <p className="text-[11px] text-slate-300 mt-0.5">
                 {drawerMode === 'add-new'
                   ? 'قالب مورد نظر را انتخاب کنید تا به عنوان بررسی جدید به پرونده همین بیمار اضافه شود'
-                  : 'تفکیک‌شده بر اساس مدالیته و پزشکان متخصص • با قابلیت سنجاق در نوار سریع'}
+                  : 'تفکیک‌شده بر اساس مدالیته و پزشکان متخصص • مرتب بر اساس میزان استفاده'}
               </p>
             </div>
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleSmoothClose}
             className="h-8 px-2.5 rounded-xl bg-slate-800 hover:bg-rose-600 text-slate-200 hover:text-white border border-slate-700 hover:border-rose-500 flex items-center gap-1 text-xs font-bold shrink-0 transition-colors cursor-pointer"
           >
             <span>بستن</span>
@@ -294,16 +318,6 @@ export const TemplateDrawer: React.FC<TemplateDrawerProps> = ({
                     </option>
                   ))}
                 </select>
-
-                <label className="flex items-center gap-1.5 text-xs font-bold text-slate-700 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={inlinePin}
-                    onChange={(e) => setInlinePin(e.target.checked)}
-                    className="w-4 h-4 rounded text-teal-600 focus:ring-teal-500 cursor-pointer"
-                  />
-                  <span>سنجاق شود بالای ویرایشگر (دسترسی تک‌کلیکی)</span>
-                </label>
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-1">
@@ -374,12 +388,6 @@ export const TemplateDrawer: React.FC<TemplateDrawerProps> = ({
                         <h4 className="text-xs sm:text-sm font-bold text-slate-900">
                           {template.title}
                         </h4>
-                        {template.isPinned && (
-                          <span className="text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 px-1.5 py-0.2 rounded-md flex items-center gap-0.5">
-                            <Pin className="w-2.5 h-2.5 fill-amber-500 text-amber-600" />
-                            <span>سنجاق</span>
-                          </span>
-                        )}
                       </div>
                       <div className="flex items-center gap-2 mt-1 flex-wrap">
                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${modCardTheme.badge}`}>
@@ -403,27 +411,6 @@ export const TemplateDrawer: React.FC<TemplateDrawerProps> = ({
                     </div>
 
                     <div className="flex items-center gap-1.5 shrink-0">
-                      {/* Pin / Unpin to Top Bar Button */}
-                      {onTogglePinTemplate && (
-                        <button
-                          type="button"
-                          onClick={() => onTogglePinTemplate(template.id)}
-                          className={`h-7 text-xs font-bold px-2.5 rounded-lg border inline-flex items-center gap-1 transition-all duration-150 cursor-pointer ${
-                            template.isPinned
-                              ? 'bg-amber-500 text-white border-amber-600 hover:bg-amber-600'
-                              : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-amber-50 hover:text-amber-800 hover:border-amber-300'
-                          }`}
-                          title={
-                            template.isPinned
-                              ? 'برداشتن سنجاق از نوار بالای ویرایشگر'
-                              : 'سنجاق کردن در نوار بالای ویرایشگر برای دسترسی تک‌کلیکی'
-                          }
-                        >
-                          <Pin className={`w-3 h-3 ${template.isPinned ? 'fill-white' : ''}`} />
-                          <span>{template.isPinned ? 'سنجاق‌شده' : 'سنجاق'}</span>
-                        </button>
-                      )}
-
                       {/* Clone button */}
                       <button
                         type="button"
