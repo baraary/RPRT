@@ -932,6 +932,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
             </div>
 
+            {/* Live Heading Font Preview */}
+            <div
+              className="p-2.5 rounded-xl bg-white border border-slate-200 text-sky-800 leading-relaxed flex items-center gap-2 flex-wrap"
+              style={{
+                fontFamily: `${headingFont}, 'Vazirmatn', sans-serif`,
+                fontSize: headingFontSize || '16px',
+                fontWeight: headingBold ? 900 : 700,
+              }}
+            >
+              <span className="text-[10px] font-bold text-sky-700 bg-sky-50 px-1.5 py-0.5 rounded border border-sky-200 font-sans">
+                پیش‌نمایش تیتر گزارش:
+              </span>
+              <span>سونوگرافی کامل شکم و لگن با پروب کانوکس ۳.۵ مگاهرتز</span>
+            </div>
+
             {/* Application-Wide UI Font Family (فونت کل رابط کاربری برنامه جهت کاهش خستگی چشم در شیفت‌های طولانی) */}
             <div className="p-3.5 bg-indigo-50/60 border border-indigo-200 rounded-2xl space-y-3">
               <div className="flex items-center justify-between flex-wrap gap-2">

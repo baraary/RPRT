@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Doctor } from '../types';
-import { User, X, Plus, Trash2, PenTool, Upload, Stamp, Check } from 'lucide-react';
+import { User, X, Plus, Trash2, PenTool, Upload, Check, Pencil } from 'lucide-react';
 
 // Built-in vector sample Doctor Digital Signatures (100% offline SVG Data URIs)
 const SAMPLE_DOCTOR_SIGNATURES: { id: string; label: string; url: string }[] = [
@@ -62,8 +62,6 @@ export const DoctorManagementModal: React.FC<DoctorManagementModalProps> = ({
   onAddDoctor,
   onUpdateDoctor,
   onDeleteDoctor,
-  defaultSignatureUrl = '',
-  onUpdateDefaultSignatureUrl,
 }) => {
   const [showAddForm, setShowAddForm] = useState(false);
   const [name, setName] = useState('');
@@ -126,10 +124,10 @@ export const DoctorManagementModal: React.FC<DoctorManagementModalProps> = ({
             </div>
             <div className="min-w-0">
               <h3 className="font-bold text-sm sm:text-base">
-                مدیریت پزشکان متخصص، مهر و امضای دیجیتال
+                مدیریت و ویرایش پزشکان متخصص، مهر و امضای دیجیتال
               </h3>
               <p className="text-[11px] text-teal-100 mt-0.5">
-                تعریف پزشکان، شماره نظام پزشکی، متن مهر و تصویر امضای دیجیتال پای برگه گزارش A4
+                افزودن یا ویرایش نام پزشک، شماره نظام پزشکی، تخصص، متن مهر و امضای دیجیتال پای برگه A4
               </p>
             </div>
           </div>
@@ -147,7 +145,7 @@ export const DoctorManagementModal: React.FC<DoctorManagementModalProps> = ({
         <div className="p-5 sm:p-6 overflow-y-auto space-y-4 flex-1">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <span className="text-xs font-bold text-slate-600">
-              لیست متخصصین رادیولوژی و تنظیمات مهر و امضای هر پزشک
+              برای ویرایش نام، تخصص، نظام پزشکی یا مهر هر پزشک روی دکمه «ویرایش اطلاعات و مهر» کلیک کنید:
             </span>
             <button
               type="button"
@@ -308,7 +306,6 @@ export const DoctorManagementModal: React.FC<DoctorManagementModalProps> = ({
             {doctors.map((doc) => {
               const isCurrent = doc.id === activeDoctorId;
               const isExpanded = currentExpandedId === doc.id;
-              // هر پزشک امضای دیجیتال کاملاً مستقل خودش را دارد (بدون اشتراک با پزشکان دیگر)
               const effectiveSignatureUrl = doc.signatureUrl || '';
 
               const updateDocSignature = (url: string) => {
@@ -328,7 +325,7 @@ export const DoctorManagementModal: React.FC<DoctorManagementModalProps> = ({
                   <div className="p-4 flex items-center justify-between gap-3 flex-wrap">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-2xl bg-teal-600 text-white flex items-center justify-center font-bold text-sm shadow-xs shrink-0">
-                        {doc.name.slice(5, 6) || 'پ'}
+                        {doc.name.replace(/^دکتر\s*/, '').slice(0, 1) || 'پ'}
                       </div>
                       <div>
                         <div className="flex items-center gap-2 flex-wrap">
@@ -366,8 +363,8 @@ export const DoctorManagementModal: React.FC<DoctorManagementModalProps> = ({
                             : 'border-indigo-200 text-indigo-700 bg-indigo-50/70 hover:bg-indigo-100'
                         }`}
                       >
-                        <Stamp className="w-3.5 h-3.5" />
-                        <span>تنظیمات مهر و امضا</span>
+                        <Pencil className="w-3.5 h-3.5" />
+                        <span>{isExpanded ? 'بستن پنل ویرایش' : 'ویرایش اطلاعات و مهر'}</span>
                       </button>
 
                       {!isCurrent ? (
@@ -401,22 +398,35 @@ export const DoctorManagementModal: React.FC<DoctorManagementModalProps> = ({
                     </div>
                   </div>
 
-                  {/* Expandable Stamp & Digital Signature Editor for this Doctor */}
+                  {/* Expandable Full Doctor Info, Stamp & Digital Signature Editor */}
                   {isExpanded && (
-                    <div className="px-4 pb-4 pt-3 border-t border-slate-200/80 bg-white/90 space-y-3.5 animate-fadeIn">
+                    <div className="px-4 pb-4 pt-3.5 border-t border-slate-200/80 bg-white/95 space-y-3.5 animate-fadeIn">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-black text-indigo-950 flex items-center gap-1.5">
+                          <Pencil className="w-3.5 h-3.5 text-indigo-600" />
+                          <span>ویرایش مشخصات کامل پزشک و مهر چاپی:</span>
+                        </span>
+                        <span className="text-[10.5px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-lg">
+                          ✓ تغییرات به صورت آنی ذخیره می‌شوند
+                        </span>
+                      </div>
+
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
                           <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                            عنوان تخصص در مهر چاپی:
+                            نام و نام خانوادگی پزشک:
                           </label>
                           <input
                             type="text"
-                            value={doc.specialty}
+                            value={doc.name}
                             onChange={(e) =>
-                              onUpdateDoctor?.(doc.id, { specialty: e.target.value })
+                              onUpdateDoctor?.(doc.id, {
+                                name: e.target.value,
+                                title: e.target.value,
+                              })
                             }
-                            placeholder="متخصص رادیولوژی و سونوگرافی"
-                            className="w-full text-xs p-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-teal-500 focus:outline-none"
+                            placeholder="دکتر ..."
+                            className="w-full text-xs p-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-teal-500 focus:outline-none font-bold"
                           />
                         </div>
                         <div>
@@ -432,6 +442,37 @@ export const DoctorManagementModal: React.FC<DoctorManagementModalProps> = ({
                             }
                             placeholder="۴۵۸۹۲"
                             className="w-full text-xs p-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-teal-500 focus:outline-none font-mono"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                            عنوان تخصص یا فلوشیپ در مهر چاپی:
+                          </label>
+                          <input
+                            type="text"
+                            value={doc.specialty}
+                            onChange={(e) =>
+                              onUpdateDoctor?.(doc.id, { specialty: e.target.value })
+                            }
+                            placeholder="متخصص رادیولوژی و سونوگرافی"
+                            className="w-full text-xs p-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-teal-500 focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                            متن مهر دیجیتال انتهای گزارش:
+                          </label>
+                          <input
+                            type="text"
+                            value={doc.stampText || ''}
+                            onChange={(e) =>
+                              onUpdateDoctor?.(doc.id, { stampText: e.target.value })
+                            }
+                            placeholder={`${doc.name} - ${doc.specialty} - ن.پ ${doc.medicalCouncilId}`}
+                            className="w-full text-xs p-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-teal-500 focus:outline-none"
                           />
                         </div>
                       </div>

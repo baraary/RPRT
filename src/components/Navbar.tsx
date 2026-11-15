@@ -12,9 +12,11 @@ import {
   UserCheck,
   Monitor,
   Minimize2,
+  LayoutGrid,
 } from 'lucide-react';
 
 interface NavbarProps {
+  clinicName?: string;
   modality: Modality;
   onSelectModality: (modality: Modality) => void;
   modalityColors?: ModalityColors;
@@ -37,12 +39,11 @@ interface NavbarProps {
   onOpenSettings: () => void;
   onNewReport?: () => void;
   onPrintPreview?: () => void;
+  onOpenLaunchpad?: () => void;
 }
 
-// Custom uploaded Radiology Vector Emblem (/public/assets/aistudio/Layer-1_64c7d528.svg)
-// Uses fill="currentColor" so it dynamically adapts its color to the active modality!
 const ModalityBrandLogo: React.FC<{ className?: string; style?: React.CSSProperties }> = ({
-  className = 'h-9 w-auto',
+  className = 'h-8 w-auto',
   style,
 }) => (
   <svg
@@ -69,6 +70,7 @@ const ModalityBrandLogo: React.FC<{ className?: string; style?: React.CSSPropert
 );
 
 export const Navbar: React.FC<NavbarProps> = ({
+  clinicName,
   modality,
   onSelectModality,
   modalityColors,
@@ -86,6 +88,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   isOnline,
   onOpenDoctors,
   onOpenSettings,
+  onOpenLaunchpad,
 }) => {
   const currentDoctor = doctors.find((d) => d.id === activeDoctorId) || doctors[0];
   const currentTypist = typists.find((t) => t.id === activeTypistId) || typists[0];
@@ -105,82 +108,49 @@ export const Navbar: React.FC<NavbarProps> = ({
     ct: 'سی‌تی‌اسکن',
   };
 
-  const modalityStyles: Record<
-    Modality,
-    {
-      activeBtn: string;
-      inactiveBtn: string;
-      dot: string;
-      badge: string;
-      logoColor: string;
-    }
-  > = {
-    sonography: {
-      activeBtn: 'bg-sky-600 text-white border-sky-600 shadow-xs shadow-sky-600/25',
-      inactiveBtn: 'text-slate-600 hover:text-sky-800 hover:bg-sky-50/90 border-transparent',
-      dot: 'bg-sky-500',
-      badge: 'text-sky-700 bg-sky-50 border-sky-200',
-      logoColor: 'text-sky-600 drop-shadow-[0_1px_2px_rgba(2,132,199,0.25)]',
-    },
-    mri: {
-      activeBtn: 'bg-indigo-600 text-white border-indigo-600 shadow-xs shadow-indigo-600/25',
-      inactiveBtn: 'text-slate-600 hover:text-indigo-800 hover:bg-indigo-50/90 border-transparent',
-      dot: 'bg-indigo-500',
-      badge: 'text-indigo-700 bg-indigo-50 border-indigo-200',
-      logoColor: 'text-indigo-600 drop-shadow-[0_1px_2px_rgba(79,70,229,0.25)]',
-    },
-    ct: {
-      activeBtn: 'bg-emerald-600 text-white border-emerald-600 shadow-xs shadow-emerald-600/25',
-      inactiveBtn: 'text-slate-600 hover:text-emerald-800 hover:bg-emerald-50/90 border-transparent',
-      dot: 'bg-emerald-500',
-      badge: 'text-emerald-700 bg-emerald-50 border-emerald-200',
-      logoColor: 'text-emerald-600 drop-shadow-[0_1px_2px_rgba(5,150,105,0.25)]',
-    },
-  };
-
-  const activeModStyle = modalityStyles[modality];
-
   return (
     <header
       id="app-main-navbar"
-      className="sticky top-0 z-40 bg-white border-b border-slate-200 shadow-xs no-print transition-colors duration-200"
+      className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200/90 no-print transition-colors duration-150"
     >
-      {/* Single Clean Header Bar: Brand with Modality-Colored Custom Emblem, Modality Tabs, Status & Selectors */}
       <div className="w-full max-w-[1680px] 2xl:max-w-[1840px] mx-auto px-4 sm:px-6 lg:px-8 2xl:px-10 py-2">
-        <div className="flex items-center justify-between gap-3">
-          {/* Logo & Brand (Uploaded SVG Emblem sized to match header bar & colored by active modality) */}
+        <div className="flex flex-wrap items-center justify-between gap-y-2 gap-x-3">
+          {/* Zone 1: Brand & Shift Launchpad Trigger */}
           <div className="flex items-center gap-2.5 shrink-0">
-            <ModalityBrandLogo
-              className={`h-9 sm:h-10 w-auto shrink-0 transition-colors duration-300 ${activeModStyle.logoColor}`}
-              style={{ color: activeModalityHex }}
-            />
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="font-bold text-sm sm:text-base text-slate-900 tracking-tight whitespace-nowrap">
-                  رادیورپورت
+            <button
+              type="button"
+              onClick={onOpenLaunchpad}
+              className="flex items-center gap-2.5 text-right group cursor-pointer focus:outline-none"
+              title="بازگشت به صفحه آغاز شیفت و انتخاب مدالیته / پزشک / تایپیست"
+            >
+              <ModalityBrandLogo
+                className="h-8 sm:h-9 w-auto shrink-0 transition-transform duration-200 group-hover:scale-105"
+                style={{ color: activeModalityHex }}
+              />
+              <div>
+                <h1 className="font-extrabold text-sm sm:text-base text-slate-900 tracking-tight whitespace-nowrap">
+                  {clinicName || 'مرکز جامع تصویربرداری بیمارستان شفا'}
                 </h1>
-                <span
-                  className={`text-[11px] font-semibold px-1.5 py-0.5 rounded-md border whitespace-nowrap transition-colors duration-300 ${activeModStyle.badge}`}
-                  style={{
-                    color: activeModalityHex,
-                    borderColor: `${activeModalityHex}40`,
-                    backgroundColor: `${activeModalityHex}12`,
-                  }}
-                >
-                  نسخه تخصصی
-                </span>
               </div>
-              <p className="text-[11px] text-slate-500 hidden xl:block whitespace-nowrap">
-                سامانه هوشمند گزارش‌نویسی ام‌آر‌آی، سی‌تی‌اسکن و سونوگرافی
-              </p>
-            </div>
+            </button>
+
+            {onOpenLaunchpad && (
+              <button
+                type="button"
+                onClick={onOpenLaunchpad}
+                className="h-8 px-2.5 rounded-lg bg-slate-100 hover:bg-slate-200/80 text-slate-700 hover:text-slate-900 text-[11px] font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
+                title="تغییر شیفت، مدالیته، پزشک یا تایپیست در صفحه اصلی"
+              >
+                <LayoutGrid className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                <span className="hidden lg:inline">صفحه شیفت</span>
+              </button>
+            )}
           </div>
 
-          {/* Center: Modality Tabs (Uniform Width & Height, Color-Coded per Modality) */}
-          <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl border border-slate-200/90">
+          {/* Zone 2: Clean Segmented Modality Switcher */}
+          <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl border border-slate-200/80">
             {(['sonography', 'mri', 'ct'] as Modality[]).map((m) => {
               const active = modality === m;
-              const mStyle = modalityStyles[m];
               const mHex = modalityColors?.[m] || defaultHexByModality[m];
               return (
                 <button
@@ -191,191 +161,86 @@ export const Navbar: React.FC<NavbarProps> = ({
                     active
                       ? {
                           backgroundColor: mHex,
-                          borderColor: mHex,
                           color: '#ffffff',
                         }
                       : undefined
                   }
-                  className={`h-8 min-w-[100px] sm:min-w-[114px] px-3 rounded-lg inline-flex items-center justify-center gap-2 text-xs font-bold whitespace-nowrap border transition-all duration-200 active:scale-95 cursor-pointer ${
-                    active ? mStyle.activeBtn : mStyle.inactiveBtn
+                  className={`h-8 min-w-[96px] sm:min-w-[112px] px-3 rounded-lg inline-flex items-center justify-center gap-1.5 text-xs font-bold whitespace-nowrap transition-all duration-150 cursor-pointer ${
+                    active
+                      ? 'shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
                   }`}
                 >
-                  <span
-                    className={`w-2 h-2 rounded-full transition-colors ${
-                      active ? 'bg-white' : mStyle.dot
-                    }`}
-                    style={!active ? { backgroundColor: mHex } : undefined}
-                  />
                   <span>{modalityNames[m]}</span>
                 </button>
               );
             })}
           </div>
 
-          {/* Left: Uniform Height (h-9) Controls: Desktop Mode, Settings Icon, Dark Mode, Online Status, Typist Selector, Doctor Selector */}
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            {/* Native Desktop Mode Button (Uses Fullscreen + WakeLock Browser APIs & Floating Toolbars/Panels) */}
-            {onToggleDesktopMode && (
-              <button
-                type="button"
-                onClick={onToggleDesktopMode}
-                className={`h-9 px-2.5 rounded-xl inline-flex items-center justify-center gap-1.5 text-xs font-bold border whitespace-nowrap transition-all duration-200 active:scale-95 cursor-pointer ${
-                  desktopMode
-                    ? 'bg-teal-600 text-white border-teal-500 shadow-xs shadow-teal-600/25'
-                    : 'bg-slate-100 hover:bg-teal-50 border-slate-200 hover:border-teal-300 text-slate-700 hover:text-teal-900'
-                }`}
-                title={
-                  desktopMode
-                    ? 'خروج از حالت دسکتاپ (Esc یا Alt+D)'
-                    : 'حالت دسکتاپ (Native): تمام‌صفحه کردن مانیتور و شناورسازی نوار ابزارها و پنل‌های جانبی برای حداکثر فضای تایپ (Alt+D)'
-                }
-              >
-                {desktopMode ? (
-                  <>
-                    <Minimize2 className="w-3.5 h-3.5 shrink-0" />
-                    <span>خروج از حالت دسکتاپ</span>
-                  </>
-                ) : (
-                  <>
-                    <Monitor className="w-3.5 h-3.5 text-teal-600 shrink-0" />
-                    <span>حالت دسکتاپ</span>
-                  </>
-                )}
-              </button>
-            )}
-
-            {/* Settings Icon Button (Uniform h-9 right next to Dark Mode) */}
-            <button
-              type="button"
-              onClick={onOpenSettings}
-              className="h-9 px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200/80 border border-slate-200 text-slate-700 hover:text-slate-900 inline-flex items-center justify-center gap-1.5 text-xs font-bold whitespace-nowrap transition-all duration-200 active:scale-95 cursor-pointer"
-              title="تنظیمات سامانه، مشخصات مرکز، نصب آفلاین و پشتیبان‌گیری"
-            >
-              <SettingsIcon className="w-3.5 h-3.5 text-slate-700 shrink-0" />
-              <span className="hidden 2xl:inline">تنظیمات</span>
-            </button>
-
-            {/* Dark Mode Toggle (Uniform h-9) */}
-            {onToggleDarkMode && (
-              <button
-                type="button"
-                onClick={onToggleDarkMode}
-                className={`h-9 px-2.5 rounded-xl inline-flex items-center justify-center gap-1.5 text-xs font-bold border whitespace-nowrap transition-all duration-200 active:scale-95 cursor-pointer ${
-                  darkMode
-                    ? 'bg-amber-400/20 border-amber-400/50 text-amber-300'
-                    : 'bg-slate-100 hover:bg-slate-200/80 border-slate-200 text-slate-700'
-                }`}
-                title={
-                  darkMode
-                    ? 'بازگشت به حالت روشن'
-                    : 'حالت تاریک مخصوص اتاق گزارش‌نویسی رادیولوژی و شیفت شب'
-                }
-              >
-                {darkMode ? (
-                  <>
-                    <Sun className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                    <span className="hidden 2xl:inline">حالت روز</span>
-                  </>
-                ) : (
-                  <>
-                    <Moon className="w-3.5 h-3.5 text-slate-700 shrink-0" />
-                    <span className="hidden 2xl:inline">حالت شب</span>
-                  </>
-                )}
-              </button>
-            )}
-
-            {/* Online / Offline status badge (Uniform h-9) */}
-            <div
-              className={`h-9 px-2.5 rounded-xl inline-flex items-center justify-center gap-1.5 text-xs font-bold border whitespace-nowrap transition-colors duration-200 ${
-                isOnline
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                  : 'bg-amber-50 text-amber-700 border-amber-200'
-              }`}
-              title={isOnline ? 'سامانه آنلاین است' : 'سامانه در حالت آفلاین'}
-            >
-              {isOnline ? (
-                <>
-                  <Wifi className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  <span className="hidden 2xl:inline">آنلاین</span>
-                </>
-              ) : (
-                <>
-                  <WifiOff className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                  <span className="hidden 2xl:inline">آفلاین</span>
-                </>
-              )}
-            </div>
-
-            {/* Active Typist Selector (Uniform h-9 + Smooth Dropdown with Analytics Access) */}
+          {/* Zone 3: Cohesive Slate Controls (Typist, Doctor, Theme, Settings) */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            {/* Typist Selector Dropdown */}
             <div className="relative group">
               <button
                 type="button"
-                className="h-9 px-2.5 rounded-xl bg-sky-50/90 hover:bg-sky-100/80 border border-sky-200 inline-flex items-center justify-center gap-1.5 transition-all duration-200 cursor-pointer whitespace-nowrap"
-                title="انتخاب تایپیست فعال و مشاهده آمار داخلی"
+                className="h-8 px-2.5 rounded-lg bg-slate-100 hover:bg-slate-200/80 border border-slate-200/80 text-slate-700 inline-flex items-center justify-center gap-1.5 transition-colors duration-150 cursor-pointer whitespace-nowrap"
+                title="تایپیست فعال و مشاهده آمار کارکرد"
               >
-                <UserCheck className="w-3.5 h-3.5 text-sky-600 shrink-0" />
-                <span className="text-xs font-bold text-sky-950 hidden md:inline">
+                <UserCheck className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                <span className="text-xs font-semibold text-slate-800 hidden md:inline">
                   {currentTypist?.name}
                 </span>
-                <ChevronDown className="w-3.5 h-3.5 text-sky-600 transition-transform duration-200 group-hover:rotate-180 shrink-0" />
+                <ChevronDown className="w-3 h-3 text-slate-400 transition-transform duration-150 group-hover:rotate-180 shrink-0" />
               </button>
 
-              {/* Typist Dropdown Menu */}
-              <div className="absolute left-0 mt-1.5 w-56 bg-white border border-slate-200 rounded-2xl shadow-xl p-1.5 z-50 opacity-0 invisible translate-y-1.5 group-hover:opacity-100 group-hover:visible group-hover:translate-y-0 transition-all duration-200 ease-out">
+              <div className="absolute left-0 mt-1.5 w-56 bg-white border border-slate-200 rounded-xl shadow-lg p-1.5 z-50 opacity-0 invisible translate-y-1 group-hover:opacity-100 group-hover:visible group-hover:translate-y-0 transition-all duration-150 ease-out">
                 <div className="px-2.5 py-1.5 text-[11px] font-semibold text-slate-400 border-b border-slate-100 mb-1">
-                  تایپیست فعال (آمار داخلی مرکز)
+                  تایپیست شیفت
                 </div>
                 {typists.map((typ) => (
                   <button
                     key={typ.id}
                     type="button"
                     onClick={() => onSelectTypist(typ.id)}
-                    className={`w-full text-right px-2.5 py-2 rounded-xl text-xs flex items-center justify-between transition-colors duration-150 cursor-pointer ${
+                    className={`w-full text-right px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition-colors cursor-pointer ${
                       typ.id === activeTypistId
-                        ? 'bg-sky-50 text-sky-950 font-bold'
+                        ? 'bg-slate-900 text-white font-bold'
                         : 'text-slate-700 hover:bg-slate-100'
                     }`}
                   >
                     <span>{typ.name}</span>
-                    {typ.id === activeTypistId && (
-                      <span className="w-2 h-2 rounded-full bg-sky-600" />
-                    )}
                   </button>
                 ))}
                 <div className="border-t border-slate-100 mt-1 pt-1">
                   <button
                     type="button"
                     onClick={onOpenTypistAnalytics}
-                    className="w-full text-right px-2.5 py-1.5 rounded-xl text-xs font-bold text-teal-700 hover:bg-teal-50 flex items-center gap-1.5 transition-colors duration-150 cursor-pointer"
+                    className="w-full text-right px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-100 flex items-center gap-1.5 transition-colors cursor-pointer"
                   >
-                    <BarChart3 className="w-3.5 h-3.5 text-teal-600" />
-                    <span>آمار کارکرد روزانه/هفتگی/ماهانه</span>
+                    <BarChart3 className="w-3.5 h-3.5 text-slate-500" />
+                    <span>آمار کارکرد تایپیست‌ها</span>
                   </button>
                 </div>
               </div>
             </div>
 
-            {/* Doctor Selector (Uniform h-9, Single-Line Alignment + Smooth Animated Dropdown) */}
+            {/* Doctor Selector Dropdown */}
             <div className="relative group">
               <button
                 type="button"
-                className="h-9 px-3 rounded-xl bg-slate-100 hover:bg-slate-200/80 border border-slate-200 inline-flex items-center justify-center gap-2 transition-all duration-200 cursor-pointer whitespace-nowrap"
+                className="h-8 px-2.5 rounded-lg bg-slate-100 hover:bg-slate-200/80 border border-slate-200/80 inline-flex items-center justify-center gap-1.5 transition-colors duration-150 cursor-pointer whitespace-nowrap"
               >
-                <span className="w-5 h-5 rounded-full bg-teal-600 text-white flex items-center justify-center text-[11px] font-bold shrink-0">
-                  {currentDoctor?.name.slice(5, 6) || 'پ'}
-                </span>
+                <User className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                 <span className="text-xs font-bold text-slate-800 hidden sm:inline">
                   {currentDoctor?.name}
                 </span>
-                <span className="text-[10px] text-slate-500 font-mono hidden 2xl:inline">
+                <span className="text-[10px] text-slate-500 font-mono tabular-nums hidden 2xl:inline">
                   ({currentDoctor?.medicalCouncilId})
                 </span>
-                <ChevronDown className="w-3.5 h-3.5 text-slate-500 transition-transform duration-200 group-hover:rotate-180 shrink-0" />
+                <ChevronDown className="w-3 h-3 text-slate-400 transition-transform duration-150 group-hover:rotate-180 shrink-0" />
               </button>
 
-              {/* Smooth Animated Doctor Dropdown Menu */}
-              <div className="absolute left-0 mt-1.5 w-64 bg-white border border-slate-200 rounded-2xl shadow-xl p-1.5 z-50 opacity-0 invisible translate-y-1.5 group-hover:opacity-100 group-hover:visible group-hover:translate-y-0 transition-all duration-200 ease-out">
+              <div className="absolute left-0 mt-1.5 w-64 bg-white border border-slate-200 rounded-xl shadow-lg p-1.5 z-50 opacity-0 invisible translate-y-1 group-hover:opacity-100 group-hover:visible group-hover:translate-y-0 transition-all duration-150 ease-out">
                 <div className="px-2.5 py-1.5 text-[11px] font-semibold text-slate-400 border-b border-slate-100 mb-1">
                   پزشک متخصص رادیولوژیست
                 </div>
@@ -384,32 +249,90 @@ export const Navbar: React.FC<NavbarProps> = ({
                     key={doc.id}
                     type="button"
                     onClick={() => onSelectDoctor(doc.id)}
-                    className={`w-full text-right px-2.5 py-2 rounded-xl text-xs flex items-center justify-between transition-colors duration-150 cursor-pointer ${
+                    className={`w-full text-right px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition-colors cursor-pointer ${
                       doc.id === activeDoctorId
-                        ? 'bg-teal-50 text-teal-900 font-bold'
+                        ? 'bg-slate-900 text-white font-bold'
                         : 'text-slate-700 hover:bg-slate-100'
                     }`}
                   >
                     <div>
                       <div>{doc.name}</div>
-                      <div className="text-[10px] text-slate-400 font-normal">{doc.specialty}</div>
+                      <div
+                        className={`text-[10px] font-normal ${
+                          doc.id === activeDoctorId ? 'text-slate-300' : 'text-slate-400'
+                        }`}
+                      >
+                        {doc.specialty}
+                      </div>
                     </div>
-                    {doc.id === activeDoctorId && (
-                      <span className="w-2 h-2 rounded-full bg-teal-600" />
-                    )}
                   </button>
                 ))}
                 <div className="border-t border-slate-100 mt-1 pt-1">
                   <button
                     type="button"
                     onClick={onOpenDoctors}
-                    className="w-full text-right px-2.5 py-1.5 rounded-xl text-xs font-semibold text-teal-600 hover:bg-teal-50 flex items-center gap-1.5 transition-colors duration-150 cursor-pointer"
+                    className="w-full text-right px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-100 flex items-center gap-1.5 transition-colors cursor-pointer"
                   >
-                    <User className="w-3.5 h-3.5" />
+                    <User className="w-3.5 h-3.5 text-slate-500" />
                     <span>مدیریت پزشکان و مهر امضا</span>
                   </button>
                 </div>
               </div>
+            </div>
+
+            {onToggleDesktopMode && (
+              <button
+                type="button"
+                onClick={onToggleDesktopMode}
+                className={`h-8 px-2.5 rounded-lg inline-flex items-center justify-center gap-1.5 text-xs font-semibold border whitespace-nowrap transition-colors cursor-pointer ${
+                  desktopMode
+                    ? 'bg-slate-900 text-white border-slate-900'
+                    : 'bg-slate-100 hover:bg-slate-200/80 border-slate-200/80 text-slate-700'
+                }`}
+                title="حالت تمام‌صفحه دسکتاپ (Alt+D)"
+              >
+                {desktopMode ? (
+                  <Minimize2 className="w-3.5 h-3.5 shrink-0" />
+                ) : (
+                  <Monitor className="w-3.5 h-3.5 text-slate-600 shrink-0" />
+                )}
+              </button>
+            )}
+
+            {onToggleDarkMode && (
+              <button
+                type="button"
+                onClick={onToggleDarkMode}
+                className="h-8 w-8 rounded-lg bg-slate-100 hover:bg-slate-200/80 border border-slate-200/80 text-slate-700 inline-flex items-center justify-center transition-colors cursor-pointer"
+                title={darkMode ? 'حالت روشن' : 'حالت تاریک اتاق رادیولوژی'}
+              >
+                {darkMode ? (
+                  <Sun className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                ) : (
+                  <Moon className="w-3.5 h-3.5 text-slate-600 shrink-0" />
+                )}
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={onOpenSettings}
+              className="h-8 px-2.5 rounded-lg bg-slate-100 hover:bg-slate-200/80 border border-slate-200/80 text-slate-700 inline-flex items-center justify-center gap-1.5 text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer"
+              title="تنظیمات سامانه، مشخصات مرکز و پشتیبان‌گیری"
+            >
+              <SettingsIcon className="w-3.5 h-3.5 text-slate-600 shrink-0" />
+              <span className="hidden 2xl:inline">تنظیمات</span>
+            </button>
+
+            <div
+              className="h-8 px-2 rounded-lg bg-slate-100 border border-slate-200/80 inline-flex items-center justify-center gap-1 text-[11px] font-medium text-slate-600 whitespace-nowrap"
+              title={isOnline ? 'متصل به شبکه' : 'حالت آفلاین فعال'}
+            >
+              {isOnline ? (
+                <Wifi className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+              ) : (
+                <WifiOff className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+              )}
             </div>
           </div>
         </div>

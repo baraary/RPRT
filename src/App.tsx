@@ -31,7 +31,8 @@ import { ReportHistoryDrawer } from './components/ReportHistoryDrawer';
 import { SettingsModal } from './components/SettingsModal';
 import { FontManagerModal } from './components/FontManagerModal';
 import { CommandPaletteModal } from './components/CommandPaletteModal';
-import { PlusCircle, X, Check, Printer, Search } from 'lucide-react';
+import { ShiftLaunchpad } from './components/ShiftLaunchpad';
+import { PlusCircle, X, Check, Printer, Search, Trash2 } from 'lucide-react';
 import {
   stripSpellHighlights,
   createSlotHtml,
@@ -43,25 +44,16 @@ import {
   incrementAdmissionNumber,
 } from './services/typistUtils';
 
-function createDefaultStudy(slotsEnabled: boolean, mod: Modality = 'sonography'): ReportStudy {
-  const rawFindings = `<p><strong>کبد:</strong> دارای ابعاد و لبه‌های طبیعی است (اسپن ۱۴۲ میلی‌متر). اکوپترن پارانشیم هموژن و یکنواخت بوده و شواهدی از کبد چرب یا ضایعه فضاگیر دیده نمی‌شود.</p>
-<p><strong>کیسه صفرا و مجاری:</strong> کیسه صفرا دارای اتساع خوب و جدار نازک است. سنگ یا لجن صفراوی رویت نشد. مجرای مشترک صفراوی (CBD = ۴ میلی‌متر) کالیبر نرمال دارد.</p>
-<p><strong>طحال:</strong> ابعاد و اکوی طبیعی دارد (طول ۱۰۵ میلی‌متر).</p>
-<p><strong>کلیه‌ها:</strong> هر دو کلیه دارای موقعیت، اندازه و ضخامت کورتیکال طبیعی می‌باشند (طول کلیه راست ۱۱۰ میلی‌متر و کلیه چپ ۱۱۲ میلی‌متر، ضخامت کورتکس ۱۴ میلی‌متر). تصویری از سنگ یا هیدرونفروز مشاهده نشد.</p>
-<p><strong>مثانه و لگن:</strong> مثانه با حجم مناسب و جدار صاف رویت شد. مایع آزاد در پریتون و کل‌دوساک خلفی مشهود نیست.</p>`;
-
+function createDefaultStudy(_slotsEnabled: boolean, mod: Modality = 'sonography'): ReportStudy {
   return {
     id: `study-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
     modality: mod,
-    titleAndTechnique:
-      'سونوگرافی کامل شکم و لگن با پروب کانوکس ۳.۵ مگاهرتز با رعایت شرایط ناشتایی بیمار انجام شد.',
-    findingsHtml: slotsEnabled
-      ? autoWrapNumbersAsSlotsInHtml(rawFindings).updatedHtml
-      : rawFindings,
+    titleAndTechnique: '',
+    findingsHtml: '<p><br></p>',
     showComparison: false,
     comparison: '',
     showImpression: false,
-    impressionHtml: `<p><strong>نتیجه‌گیری:</strong></p><ul><li>بررسی سونوگرافی شکم و لگن در حد نرمال فیزیولوژیک سن بیمار می‌باشد (Unremarkable Exam).</li><li>شواهدی از سنگ صفرا، سنگ کلیه یا کبد چرب رویت نشد.</li></ul>`,
+    impressionHtml: '',
     showRecommendations: false,
     recommendationsHtml: '',
   };
@@ -173,11 +165,13 @@ export default function App() {
   const [shortcutsModalOrganFilter, setShortcutsModalOrganFilter] = useState<string>('all');
   const [isDoctorsOpen, setIsDoctorsOpen] = useState(false);
   const [isTypistAnalyticsOpen, setIsTypistAnalyticsOpen] = useState(false);
+  const [typistModalInitialTab, setTypistModalInitialTab] = useState<'analytics' | 'manage'>('analytics');
   const [isPrintOpen, setIsPrintOpen] = useState(false);
   const [isReportsOpen, setIsReportsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isFontManagerOpen, setIsFontManagerOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [isLaunchpadOpen, setIsLaunchpadOpen] = useState<boolean>(true);
   const [cloneTargetTemplate, setCloneTargetTemplate] = useState<MedicalTemplate | null>(null);
 
   // New Report Confirmation Modal
@@ -388,7 +382,7 @@ export default function App() {
       const toolbarEl = document.getElementById('app-editor-toolbar');
       const quickbarEl = document.getElementById('app-editor-quickbar');
 
-      const navH = navEl ? Math.round(navEl.getBoundingClientRect().height) : 102;
+      const navH = navEl ? Math.round(navEl.getBoundingClientRect().height) : 52;
       const tabsbarH = zenMode
         ? 0
         : tabsbarEl
@@ -404,6 +398,7 @@ export default function App() {
     };
 
     updateStickyOffsets();
+    const timer = window.setTimeout(updateStickyOffsets, 60);
     window.addEventListener('resize', updateStickyOffsets);
 
     const observer =
@@ -424,10 +419,11 @@ export default function App() {
     }
 
     return () => {
+      window.clearTimeout(timer);
       window.removeEventListener('resize', updateStickyOffsets);
       if (observer) observer.disconnect();
     };
-  }, [studies.length, templates.length, modality, workspaceTabs.length, zenMode]);
+  }, [studies.length, templates.length, modality, workspaceTabs.length, zenMode, isLaunchpadOpen]);
 
   // 30-Second Dirty-Check Temporary Auto-Draft System in localStorage (Crash & Sudden Browser Close Protection)
   const currentDraftPayload = JSON.stringify({
@@ -1262,11 +1258,35 @@ export default function App() {
     showToast(`⚡ قالب «${template.title}» اعمال شد.`);
   };
 
-  // Delete template
+  // Update, Delete, Bulk-Delete & Reset templates
+  const handleUpdateTemplate = (id: string, updates: Partial<MedicalTemplate>) => {
+    const updated = StorageService.updateTemplate(id, updates);
+    setTemplates(updated);
+    showToast('✓ تغییرات قالب ذخیره شد.');
+  };
+
   const handleDeleteTemplate = (id: string) => {
     const updated = StorageService.deleteTemplate(id);
     setTemplates(updated);
-    showToast('قالب حذف شد.');
+    setSelectedNewTabTemplates((prev) => prev.filter((t) => t.id !== id));
+    showToast('قالب به صورت دائمی حذف شد.');
+  };
+
+  const handleDeleteAllTemplates = (targetModality: Modality | 'all') => {
+    const updated = StorageService.deleteAllTemplates(targetModality);
+    setTemplates(updated);
+    setSelectedNewTabTemplates([]);
+    showToast(
+      targetModality === 'all'
+        ? 'تمام قالب‌ها از سیستم پاکسازی شدند.'
+        : 'تمام قالب‌های این بخش حذف شدند.'
+    );
+  };
+
+  const handleResetDefaultTemplates = () => {
+    const updated = StorageService.resetTemplatesToDefaults();
+    setTemplates(updated);
+    showToast('↺ قالب‌های استاندارد پیش‌فرض بازنشانی شدند.');
   };
 
   // Direct 1-step Create template from current study (from main editor or drawer)
@@ -1384,6 +1404,12 @@ export default function App() {
     setActiveTypistId(created.id);
     StorageService.saveSettings({ activeTypistId: created.id });
     showToast(`✓ تایپیست جدید «${created.name}» اضافه و فعال شد.`);
+  };
+
+  const handleUpdateTypist = (id: string, updates: Partial<Typist>) => {
+    const updated = StorageService.updateTypist(id, updates);
+    setTypists(updated);
+    showToast('✓ مشخصات تایپیست ویرایش و ذخیره شد.');
   };
 
   const handleDeleteTypist = (id: string) => {
@@ -1548,268 +1574,353 @@ export default function App() {
         </div>
       )}
 
-      {/* Top Main Navigation */}
-      <Navbar
-        modality={modality}
-        onSelectModality={handleSelectModality}
-        doctors={doctors}
-        activeDoctorId={activeDoctorId}
-        onSelectDoctor={(id) => {
-          setActiveDoctorId(id);
-          StorageService.saveSettings({ activeDoctorId: id });
-        }}
-        typists={typists}
-        activeTypistId={activeTypistId}
-        onSelectTypist={handleSelectTypist}
-        onOpenTypistAnalytics={() => setIsTypistAnalyticsOpen(true)}
-        smartSuggestionsEnabled={settings.smartSuggestionsEnabled}
-        onToggleSmartSuggestions={() => {
-          const updated = !settings.smartSuggestionsEnabled;
-          setSettings((prev) => ({ ...prev, smartSuggestionsEnabled: updated }));
-          StorageService.saveSettings({ smartSuggestionsEnabled: updated });
-        }}
-        darkMode={Boolean(settings.darkMode)}
-        onToggleDarkMode={() => {
-          const nextDark = !settings.darkMode;
-          setSettings((prev) => ({ ...prev, darkMode: nextDark }));
-          StorageService.saveSettings({ darkMode: nextDark });
-          showToast(
-            nextDark
-              ? '🌙 حالت تاریک (مخصوص اتاق رادیولوژی و شیفت شب) فعال شد.'
-              : '☀️ حالت روشن فعال شد.'
-          );
-        }}
-        isOnline={isOnline}
-        onOpenDoctors={() => setIsDoctorsOpen(true)}
-        onOpenReports={() => setIsReportsOpen(true)}
-        onOpenSettings={() => setIsSettingsOpen(true)}
-        onNewReport={() => setIsNewReportModalOpen(true)}
-        onPrintPreview={() => setIsPrintOpen(true)}
-        modalityColors={settings.modalityColors}
-      />
-
-      {/* Multi-Patient Open Workspace Tabs Bar (Hidden in Zen Focus Mode) */}
-      {!zenMode && (
-        <PatientTabsBar
-          tabs={workspaceTabs}
-          activeTabId={activeTabId}
-          onSelectTab={handleSelectWorkspaceTab}
-          onAddNewTab={handleAddNewPatientTab}
-          onDuplicateActiveTab={handleDuplicateActiveTab}
-          onCloseTab={handleCloseWorkspaceTab}
-          onUpdateTabPatientName={handleUpdateTabPatientName}
-          onOpenReports={() => setIsReportsOpen(true)}
-          onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+      {isLaunchpadOpen ? (
+        <ShiftLaunchpad
+          settings={settings}
+          modality={modality}
+          onSelectModality={handleSelectModality}
+          modalityColors={settings.modalityColors}
+          doctors={doctors}
+          activeDoctorId={activeDoctorId}
+          onSelectDoctor={(id) => {
+            setActiveDoctorId(id);
+            StorageService.saveSettings({ activeDoctorId: id });
+          }}
+          typists={typists}
+          activeTypistId={activeTypistId}
+          onSelectTypist={handleSelectTypist}
+          templates={templates}
           reportsCount={savedReports.length}
-        />
-      )}
-
-      {/* Crash-Recovery Banner if an Unsaved Temporary Draft from Sudden Browser Closure Exists */}
-      {recoverableDraft && !zenMode && (
-        <div className="max-w-[1680px] 2xl:max-w-[1840px] w-full mx-auto px-4 sm:px-6 lg:px-8 2xl:px-10 pt-2.5 no-print">
-          <div className="bg-amber-50 border border-amber-300 rounded-2xl px-4 py-2.5 flex items-center justify-between flex-wrap gap-2 shadow-2xs">
-            <div className="flex items-center gap-2 text-xs text-amber-950">
-              <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse" />
-              <span className="font-bold">
-                یک پیش‌نویس موقت از جلسه قبلی (ساعت {recoverableDraft.savedTimeFormatted || 'اخیر'}) یافت شد. آیا مایل به بازیابی آن هستید؟
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={handleRestoreTemporaryDraft}
-                className="px-3 py-1 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold shadow-2xs cursor-pointer"
-              >
-                بازیابی پیش‌نویس
-              </button>
-              <button
-                type="button"
-                onClick={handleDismissTemporaryDraft}
-                className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-600 border border-amber-300 rounded-xl text-xs font-semibold cursor-pointer"
-              >
-                نادیده گرفتن
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Patient Header Box (Hidden in Zen Focus Mode) */}
-      {!zenMode && (
-        <PatientHeader
-          patientInfo={patientInfo}
-          onChange={setPatientInfo}
-          criticalAlert={criticalAlert}
-          onClearCriticalAlert={() => setCriticalAlert(undefined)}
-          genderMismatch={genderMismatch}
-          onSanitizeGenderMismatch={handleSanitizeGenderMismatch}
-        />
-      )}
-
-      {/* Full Word/Google Docs Medical Toolbar */}
-      <EditorToolbar
-        onExecCommand={handleExecCommand}
-        onInsertTable={handleInsertTable}
-        onInsertPresetTable={handleInsertPresetTable}
-        onInsertSymbol={handleInsertSymbol}
-        onFindReplace={handleFindReplace}
-        wordCount={wordCount}
-        charCount={charCount}
-        isListening={isListening}
-        onToggleVoice={toggleVoice}
-        hasSpeechSupport={hasSpeechSupport}
-        activeDirection={activeDirection}
-        onToggleDirection={() => setActiveDirection((d) => (d === 'rtl' ? 'ltr' : 'rtl'))}
-        onFormatBlock={handleFormatBlock}
-        fonts={settings.customFonts || []}
-        defaultFont={settings.defaultFont || 'Vazirmatn'}
-        onChangeDefaultFont={(fontFamily) => {
-          const updated = { ...settings, defaultFont: fontFamily };
-          setSettings(updated);
-          StorageService.saveSettings(updated);
-        }}
-        onOpenFontManager={() => setIsFontManagerOpen(true)}
-        editorZoom={editorZoom}
-        onChangeZoom={setEditorZoom}
-        lineHeight={settings.editorLineHeight || 1.8}
-        onChangeLineHeight={(lh) => {
-          const updated = { ...settings, editorLineHeight: lh, printLineHeight: lh };
-          setSettings(updated);
-          StorageService.saveSettings(updated);
-          showToast(`↕️ فاصله خطوط گزارش (ویرایشگر و چاپ) به ${lh} تنظیم شد.`);
-        }}
-      />
-
-      {/* Main Medical Document Canvas (with Smooth Tab Crossfade, Multi-Study Support, Zen Focus Mode, and Split-Screen Prior Report Comparison) */}
-      <main key={`${activeTabId}-${modality}`} className="flex-1 pb-20 animate-tabSwitch">
-        <RichMedicalEditor
-          studies={studies}
-          onUpdateStudy={handleUpdateStudy}
-          onAddStudy={handleAddStudy}
-          onRemoveStudy={handleRemoveStudy}
-          patientInfo={patientInfo}
-          shortcuts={shortcuts}
-          smartSuggestionsEnabled={settings.smartSuggestionsEnabled}
-          numberSlotsEnabled={Boolean(settings.numberSlotsEnabled)}
-          activeDirection={activeDirection}
-          onRegisterActiveEditorRef={(el) => (activeEditorRef.current = el)}
-          isOnline={isOnline}
-          onOpenTemplates={(targetId) => {
-            setTargetStudyIdForTemplate(targetId);
-            setTemplateDrawerMode('replace');
-            setIsTemplatesOpen(true);
-          }}
-          onOpenShortcuts={(initialOrgan) => {
-            setShortcutsModalOrganFilter(initialOrgan || 'all');
-            setIsShortcutsOpen(true);
-          }}
-          headingFont={settings.headingFont}
-          headingFontSize={settings.headingFontSize}
-          defaultFont={settings.defaultFont || 'Vazirmatn'}
-          defaultFontSize={settings.defaultFontSize || 14}
-          onChangeDefaultFontSize={(newSize) => {
-            const updated = { ...settings, defaultFontSize: newSize };
-            setSettings(updated);
-            StorageService.saveSettings(updated);
+          todayReportsCount={
+            savedReports.filter(
+              (r) =>
+                r.patientInfo?.reportDate ===
+                new Intl.DateTimeFormat('fa-IR-u-nu-latn').format(new Date())
+            ).length
+          }
+          darkMode={Boolean(settings.darkMode)}
+          onToggleDarkMode={() => {
+            const nextDark = !settings.darkMode;
+            setSettings((prev) => ({ ...prev, darkMode: nextDark }));
+            StorageService.saveSettings({ darkMode: nextDark });
             showToast(
-              newSize < 14
-                ? `📄 سایز قلم چاپ به ${newSize} تنظیم شد تا گزارش به صورت استاندارد در ۱ صفحه A4 جا شود.`
-                : '📄 سایز قلم چاپ به حالت استاندارد (۱۴) بازگردانده شد.'
+              nextDark
+                ? 'حالت تاریک (مخصوص اتاق رادیولوژی و شیفت شب) فعال شد.'
+                : 'حالت روشن فعال شد.'
             );
           }}
-          onShowToast={showToast}
-          editorZoom={editorZoom}
-          templates={templates}
-          onApplyPinnedTemplate={handleApplyPinnedTemplate}
-          onStartQuickSaveAsTemplate={handleStartCreateTemplate}
-          zenMode={zenMode}
-          onToggleZenMode={() => {
-            setZenMode((prev) => {
-              const next = !prev;
-              showToast(
-                next
-                  ? '🧘 حالت تمرکز کامل تایپ (Zen Mode) فعال شد • برای خروج مجدداً Alt+F بزنید.'
-                  : 'حالت تمرکز کامل تایپ غیرفعال شد.'
-              );
-              return next;
-            });
+          onEnterWorkspace={(selectedModality) => {
+            const targetMod = selectedModality || modality;
+            const blankStudy = createDefaultStudy(Boolean(settings.numberSlotsEnabled), targetMod);
+            const blankPatient: PatientInfo = {
+              fullName: '',
+              nationalId: '',
+              age: '',
+              gender: 'female',
+              admissionNumber: `ADM-${Math.floor(1000 + Math.random() * 9000)}`,
+              reportDate: new Intl.DateTimeFormat('fa-IR-u-nu-latn').format(new Date()),
+              referringPhysician: '',
+            };
+            setModality(targetMod);
+            setPatientInfo(blankPatient);
+            setStudies([blankStudy]);
+            setCriticalAlert(undefined);
+            setTargetStudyIdForTemplate(blankStudy.id);
+            setRecoverableDraft(null);
+            StorageService.clearDraft();
+            const freshTab: PatientWorkspaceTab = {
+              id: `tab-${Date.now()}`,
+              patientInfo: blankPatient,
+              studies: [blankStudy],
+              modality: targetMod,
+              doctorId: activeDoctorId,
+              typistId: activeTypistId,
+              status: 'draft',
+              updatedAt: new Date().toISOString(),
+            };
+            setWorkspaceTabs([freshTab]);
+            setActiveTabId(freshTab.id);
+            StorageService.saveOpenTabs([freshTab]);
+            setIsLaunchpadOpen(false);
           }}
-          savedReports={savedReports}
-          onExecCommand={handleExecCommand}
-          isReportLocked={isCurrentReportLocked}
-          onUnlockReportForAddendum={handleUnlockReportForAddendum}
-          reportRevisions={currentReportRevisions}
-          onRestoreReportRevision={(rev) => handleRestoreReportRevision(rev)}
-          editorLineHeight={settings.editorLineHeight || 1.8}
-          printLineHeight={settings.editorLineHeight || 1.8}
+          onOpenDoctors={() => setIsDoctorsOpen(true)}
+          onOpenReports={() => setIsReportsOpen(true)}
+          onOpenTypistAnalytics={() => {
+            setTypistModalInitialTab('analytics');
+            setIsTypistAnalyticsOpen(true);
+          }}
+          onOpenTypistManage={() => {
+            setTypistModalInitialTab('manage');
+            setIsTypistAnalyticsOpen(true);
+          }}
+          onOpenSettings={() => setIsSettingsOpen(true)}
         />
-      </main>
+      ) : (
+        <>
+          {/* Top Main Navigation */}
+          <Navbar
+            modality={modality}
+            onSelectModality={handleSelectModality}
+            doctors={doctors}
+            activeDoctorId={activeDoctorId}
+            onSelectDoctor={(id) => {
+              setActiveDoctorId(id);
+              StorageService.saveSettings({ activeDoctorId: id });
+            }}
+            typists={typists}
+            activeTypistId={activeTypistId}
+            onSelectTypist={handleSelectTypist}
+            onOpenTypistAnalytics={() => setIsTypistAnalyticsOpen(true)}
+            smartSuggestionsEnabled={settings.smartSuggestionsEnabled}
+            onToggleSmartSuggestions={() => {
+              const updated = !settings.smartSuggestionsEnabled;
+              setSettings((prev) => ({ ...prev, smartSuggestionsEnabled: updated }));
+              StorageService.saveSettings({ smartSuggestionsEnabled: updated });
+            }}
+            darkMode={Boolean(settings.darkMode)}
+            onToggleDarkMode={() => {
+              const nextDark = !settings.darkMode;
+              setSettings((prev) => ({ ...prev, darkMode: nextDark }));
+              StorageService.saveSettings({ darkMode: nextDark });
+              showToast(
+                nextDark
+                  ? 'حالت تاریک (مخصوص اتاق رادیولوژی و شیفت شب) فعال شد.'
+                  : 'حالت روشن فعال شد.'
+              );
+            }}
+            isOnline={isOnline}
+            onOpenDoctors={() => setIsDoctorsOpen(true)}
+            onOpenReports={() => setIsReportsOpen(true)}
+            onOpenSettings={() => setIsSettingsOpen(true)}
+            onNewReport={() => setIsNewReportModalOpen(true)}
+            onPrintPreview={() => setIsPrintOpen(true)}
+            modalityColors={settings.modalityColors}
+            clinicName={settings.clinicName}
+            onOpenLaunchpad={() => setIsLaunchpadOpen(true)}
+          />
 
-      {/* Floating Frosted-Glass Bottom Dock */}
-      <footer className="fixed bottom-2.5 left-0 right-0 z-20 px-4 sm:px-6 lg:px-8 2xl:px-10 pointer-events-none no-print">
-        <div className="w-full max-w-[1680px] 2xl:max-w-[1840px] mx-auto">
-          <div className="pointer-events-auto bg-white/90 backdrop-blur-xl border border-slate-200/90 rounded-2xl px-4 py-2 shadow-[0_12px_36px_-10px_rgba(15,23,42,0.16)] flex items-center justify-between flex-wrap gap-2 text-xs transition-all duration-300">
-            <div className="flex items-center gap-3 text-slate-500 flex-wrap">
-              <span className="flex items-center gap-1.5 font-bold text-slate-700">
-                <span
-                  className={`w-2 h-2 rounded-full transition-colors ${
-                    hasUnsavedDraftChanges
-                      ? 'bg-amber-500 animate-pulse'
-                      : 'bg-emerald-500'
-                  }`}
-                />
-                {hasUnsavedDraftChanges
-                  ? 'تغییرات جدید شناسایی شد (ذخیره پیش‌نویس خودکار هر ۳۰ ثانیه)'
-                  : `پیش‌نویس خودکار ذخیره شد (${lastAutoDraftTime})`}
-              </span>
+          {/* Multi-Patient Open Workspace Tabs Bar (Hidden in Zen Focus Mode) */}
+          {!zenMode && (
+            <PatientTabsBar
+              tabs={workspaceTabs}
+              activeTabId={activeTabId}
+              onSelectTab={handleSelectWorkspaceTab}
+              onAddNewTab={handleAddNewPatientTab}
+              onDuplicateActiveTab={handleDuplicateActiveTab}
+              onCloseTab={handleCloseWorkspaceTab}
+              onUpdateTabPatientName={handleUpdateTabPatientName}
+              onOpenReports={() => setIsReportsOpen(true)}
+              onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+              reportsCount={savedReports.length}
+            />
+          )}
+
+          {/* Crash-Recovery Banner if an Unsaved Temporary Draft from Sudden Browser Closure Exists */}
+          {recoverableDraft && !zenMode && (
+            <div className="max-w-[1680px] 2xl:max-w-[1840px] w-full mx-auto px-4 sm:px-6 lg:px-8 2xl:px-10 pt-2.5 no-print">
+              <div className="bg-amber-50 border border-amber-300 rounded-2xl px-4 py-2.5 flex items-center justify-between flex-wrap gap-2 shadow-2xs">
+                <div className="flex items-center gap-2 text-xs text-amber-950">
+                  <span className="w-2 h-2 rounded-full bg-amber-500" />
+                  <span className="font-bold">
+                    یک پیش‌نویس موقت از جلسه قبلی (ساعت {recoverableDraft.savedTimeFormatted || 'اخیر'}) یافت شد. آیا مایل به بازیابی آن هستید؟
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleRestoreTemporaryDraft}
+                    className="px-3 py-1 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold shadow-2xs cursor-pointer"
+                  >
+                    بازیابی پیش‌نویس
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDismissTemporaryDraft}
+                    className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-600 border border-amber-300 rounded-xl text-xs font-semibold cursor-pointer"
+                  >
+                    نادیده گرفتن
+                  </button>
+                </div>
+              </div>
             </div>
+          )}
 
-            <div className="flex items-center gap-2 flex-wrap">
-              <button
-                type="button"
-                onClick={() => setIsCommandPaletteOpen(true)}
-                className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200/80 text-slate-700 border border-slate-200/90 font-bold rounded-xl transition-all duration-200 cursor-pointer flex items-center gap-1.5 active:scale-95"
-                title="جستجوگر سریع قالب‌ها، تب‌ها و دستورات (Ctrl+K)"
-              >
-                <Search className="w-3.5 h-3.5 text-slate-500" />
-                <span className="hidden sm:inline">فرمان سریع</span>
-                <kbd className="px-1.5 py-0.2 rounded bg-white text-slate-600 border border-slate-200 text-[10px] font-mono">
-                  Ctrl+K
-                </kbd>
-              </button>
+          {/* Patient Header Box (Hidden in Zen Focus Mode) */}
+          {!zenMode && (
+            <PatientHeader
+              patientInfo={patientInfo}
+              onChange={setPatientInfo}
+              criticalAlert={criticalAlert}
+              onClearCriticalAlert={() => setCriticalAlert(undefined)}
+              genderMismatch={genderMismatch}
+              onSanitizeGenderMismatch={handleSanitizeGenderMismatch}
+            />
+          )}
 
-              <button
-                type="button"
-                onClick={() => setIsReportsOpen(true)}
-                className="px-3 py-1.5 bg-slate-100 hover:bg-teal-50 text-slate-700 hover:text-teal-800 border border-slate-200/90 hover:border-teal-300 font-bold rounded-xl transition-all duration-200 cursor-pointer flex items-center gap-1.5 active:scale-95"
-                title="مشاهده و جستجوی آرشیو گزارش‌های ذخیره‌شده بیماران"
-              >
-                <span>آرشیو بیماران</span>
-                <span className="px-1.5 py-0.2 rounded-md bg-slate-200/80 text-slate-700 text-[10px] font-mono tabular-nums">
-                  {savedReports.length}
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleSaveReportToArchive(false)}
-                className="px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl shadow-xs transition-all duration-200 cursor-pointer active:scale-95 hover:-translate-y-[0.5px]"
-              >
-                ذخیره در آرشیو بیماران
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsPrintOpen(true)}
-                style={{ backgroundColor: 'var(--modality-accent, #0284c7)' }}
-                className="px-4 py-1.5 hover:opacity-95 text-white font-bold rounded-xl shadow-sm transition-all duration-200 inline-flex items-center gap-1.5 cursor-pointer active:scale-95 hover:-translate-y-[0.5px]"
-                title="مشاهده پیش‌نمایش سربرگ A4، تنظیمات چاپ و صدور گزارش نهایی"
-              >
-                <Printer className="w-3.5 h-3.5 shrink-0" />
-                <span>پیش‌نمایش چاپ سربرگ و صدور گزارش</span>
-              </button>
+          {/* Full Word/Google Docs Medical Toolbar */}
+          <EditorToolbar
+            onExecCommand={handleExecCommand}
+            onInsertTable={handleInsertTable}
+            onInsertPresetTable={handleInsertPresetTable}
+            onInsertSymbol={handleInsertSymbol}
+            onFindReplace={handleFindReplace}
+            wordCount={wordCount}
+            charCount={charCount}
+            isListening={isListening}
+            onToggleVoice={toggleVoice}
+            hasSpeechSupport={hasSpeechSupport}
+            activeDirection={activeDirection}
+            onToggleDirection={() => setActiveDirection((d) => (d === 'rtl' ? 'ltr' : 'rtl'))}
+            onFormatBlock={handleFormatBlock}
+            fonts={settings.customFonts || []}
+            defaultFont={settings.defaultFont || 'Vazirmatn'}
+            onChangeDefaultFont={(fontFamily) => {
+              const updated = { ...settings, defaultFont: fontFamily };
+              setSettings(updated);
+              StorageService.saveSettings(updated);
+            }}
+            onOpenFontManager={() => setIsFontManagerOpen(true)}
+            editorZoom={editorZoom}
+            onChangeZoom={setEditorZoom}
+            lineHeight={settings.editorLineHeight || 1.8}
+            onChangeLineHeight={(lh) => {
+              const updated = { ...settings, editorLineHeight: lh, printLineHeight: lh };
+              setSettings(updated);
+              StorageService.saveSettings(updated);
+              showToast(`فاصله خطوط گزارش (ویرایشگر و چاپ) به ${lh} تنظیم شد.`);
+            }}
+          />
+
+          {/* Main Medical Document Canvas (with Smooth Tab Crossfade, Multi-Study Support, Zen Focus Mode, and Split-Screen Prior Report Comparison) */}
+          <main key={`${activeTabId}-${modality}`} className="flex-1 pb-20 animate-tabSwitch">
+            <RichMedicalEditor
+              studies={studies}
+              onUpdateStudy={handleUpdateStudy}
+              onAddStudy={handleAddStudy}
+              onRemoveStudy={handleRemoveStudy}
+              patientInfo={patientInfo}
+              shortcuts={shortcuts}
+              smartSuggestionsEnabled={settings.smartSuggestionsEnabled}
+              numberSlotsEnabled={Boolean(settings.numberSlotsEnabled)}
+              activeDirection={activeDirection}
+              onRegisterActiveEditorRef={(el) => (activeEditorRef.current = el)}
+              isOnline={isOnline}
+              onOpenTemplates={(targetId) => {
+                setTargetStudyIdForTemplate(targetId);
+                setTemplateDrawerMode('replace');
+                setIsTemplatesOpen(true);
+              }}
+              onOpenShortcuts={(initialOrgan) => {
+                setShortcutsModalOrganFilter(initialOrgan || 'all');
+                setIsShortcutsOpen(true);
+              }}
+              headingFont={settings.headingFont}
+              headingFontSize={settings.headingFontSize}
+              defaultFont={settings.defaultFont || 'Vazirmatn'}
+              defaultFontSize={settings.defaultFontSize || 14}
+              onChangeDefaultFontSize={(newSize) => {
+                const updated = { ...settings, defaultFontSize: newSize };
+                setSettings(updated);
+                StorageService.saveSettings(updated);
+                showToast(
+                  newSize < 14
+                    ? `سایز قلم چاپ به ${newSize} تنظیم شد تا گزارش به صورت استاندارد در ۱ صفحه A4 جا شود.`
+                    : 'سایز قلم چاپ به حالت استاندارد (۱۴) بازگردانده شد.'
+                );
+              }}
+              onShowToast={showToast}
+              editorZoom={editorZoom}
+              templates={templates}
+              onApplyPinnedTemplate={handleApplyPinnedTemplate}
+              onStartQuickSaveAsTemplate={handleStartCreateTemplate}
+              zenMode={zenMode}
+              onToggleZenMode={() => {
+                setZenMode((prev) => {
+                  const next = !prev;
+                  showToast(
+                    next
+                      ? 'حالت تمرکز کامل تایپ (Zen Mode) فعال شد • برای خروج مجدداً Alt+F بزنید.'
+                      : 'حالت تمرکز کامل تایپ غیرفعال شد.'
+                  );
+                  return next;
+                });
+              }}
+              savedReports={savedReports}
+              onExecCommand={handleExecCommand}
+              isReportLocked={isCurrentReportLocked}
+              onUnlockReportForAddendum={handleUnlockReportForAddendum}
+              reportRevisions={currentReportRevisions}
+              onRestoreReportRevision={(rev) => handleRestoreReportRevision(rev)}
+              editorLineHeight={settings.editorLineHeight || 1.8}
+              printLineHeight={settings.editorLineHeight || 1.8}
+            />
+          </main>
+
+          {/* Floating Frosted-Glass Bottom Dock */}
+          <footer className="fixed bottom-2.5 left-0 right-0 z-20 px-4 sm:px-6 lg:px-8 2xl:px-10 pointer-events-none no-print">
+            <div className="w-full max-w-[1680px] 2xl:max-w-[1840px] mx-auto">
+              <div className="pointer-events-auto bg-white/95 backdrop-blur-xl border border-slate-200/90 rounded-2xl px-4 py-2 shadow-[0_12px_36px_-10px_rgba(15,23,42,0.14)] flex items-center justify-between flex-wrap gap-2 text-xs transition-all duration-300">
+                <div className="flex items-center gap-3 text-slate-500 flex-wrap">
+                  <span className="flex items-center gap-2 font-semibold text-slate-600">
+                    <span
+                      className={`w-2 h-2 rounded-full transition-colors ${
+                        hasUnsavedDraftChanges ? 'bg-amber-500' : 'bg-emerald-500'
+                      }`}
+                    />
+                    {hasUnsavedDraftChanges
+                      ? 'تغییرات جدید (ذخیره خودکار فعال)'
+                      : `پیش‌نویس خودکار ذخیره شد (${lastAutoDraftTime})`}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setIsCommandPaletteOpen(true)}
+                    className="h-8 px-2.5 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 font-semibold rounded-xl transition-all duration-150 cursor-pointer flex items-center gap-1.5"
+                    title="جستجوگر سریع قالب‌ها، تب‌ها و دستورات (Ctrl+K)"
+                  >
+                    <Search className="w-3.5 h-3.5 text-slate-500" />
+                    <span className="hidden sm:inline">فرمان سریع</span>
+                    <kbd className="px-1.5 py-0.2 rounded bg-white text-slate-500 border border-slate-200 text-[10px] font-mono">
+                      Ctrl+K
+                    </kbd>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsReportsOpen(true)}
+                    className="h-8 px-3 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 font-semibold rounded-xl transition-all duration-150 cursor-pointer flex items-center gap-1.5"
+                    title="مشاهده و جستجوی آرشیو گزارش‌های ذخیره‌شده بیماران"
+                  >
+                    <span>آرشیو بیماران</span>
+                    <span className="px-1.5 py-0.2 rounded-md bg-slate-200/80 text-slate-700 text-[10px] font-mono tabular-nums">
+                      {savedReports.length}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSaveReportToArchive(false)}
+                    className="h-8 px-3.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl shadow-2xs transition-all duration-150 cursor-pointer"
+                  >
+                    ذخیره در آرشیو بیماران
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsPrintOpen(true)}
+                    style={{ backgroundColor: 'var(--modality-accent, #0284c7)' }}
+                    className="h-8 px-4 hover:opacity-95 text-white font-bold rounded-xl shadow-xs transition-all duration-150 inline-flex items-center gap-1.5 cursor-pointer"
+                    title="مشاهده پیش‌نمایش سربرگ A4، تنظیمات چاپ و صدور گزارش نهایی"
+                  >
+                    <Printer className="w-3.5 h-3.5 shrink-0" />
+                    <span>پیش‌نمایش چاپ سربرگ و صدور گزارش</span>
+                  </button>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-      </footer>
+          </footer>
+        </>
+      )}
 
       {/* Confirmation Modal for New Report */}
       {isNewReportModalOpen && (
@@ -2076,6 +2187,19 @@ export default function App() {
                         >
                           ورود تکی ↵
                         </button>
+
+                        {/* Direct Delete Template Button */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteTemplate(tpl.id);
+                          }}
+                          title="حذف دائمی این قالب"
+                          className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     </div>
                   );
@@ -2223,7 +2347,10 @@ export default function App() {
         onSelectTemplate={applyTemplateToTargetStudy}
         onAddAsNewStudy={handleAddTemplateAsNewStudy}
         onCloneTemplate={(tpl) => setCloneTargetTemplate(tpl)}
+        onUpdateTemplate={handleUpdateTemplate}
         onDeleteTemplate={handleDeleteTemplate}
+        onDeleteAllTemplates={handleDeleteAllTemplates}
+        onResetDefaultTemplates={handleResetDefaultTemplates}
         onQuickSaveCurrentAsTemplate={handleQuickSaveCurrentAsTemplate}
         defaultSuggestedTitle={
           (studies.find((s) => s.id === targetStudyIdForTemplate) || studies[0])?.titleAndTechnique.slice(
@@ -2279,8 +2406,10 @@ export default function App() {
         activeTypistId={activeTypistId}
         onSelectTypist={handleSelectTypist}
         onAddTypist={handleAddTypist}
+        onUpdateTypist={handleUpdateTypist}
         onDeleteTypist={handleDeleteTypist}
         reports={savedReports}
+        initialTab={typistModalInitialTab}
       />
 
       <PrintPreviewModal

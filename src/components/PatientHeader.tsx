@@ -245,11 +245,11 @@ export const PatientHeader: React.FC<PatientHeaderProps> = ({
 
   return (
     <div
-      className={`w-full max-w-[1680px] 2xl:max-w-[1840px] mx-auto px-4 sm:px-6 lg:px-8 2xl:px-10 pb-1.5 no-print relative ${
+      className={`w-full max-w-[1680px] 2xl:max-w-[1840px] mx-auto px-4 sm:px-6 lg:px-8 2xl:px-10 pt-2 pb-1.5 no-print relative ${
         showRefDropdown || showDatePicker ? 'z-40' : 'z-25'
       }`}
     >
-      <div className="bg-white/95 backdrop-blur-md border border-t-0 border-slate-200/90 rounded-b-2xl shadow-xs transition-all duration-300">
+      <div className="bg-white/95 backdrop-blur-md border border-slate-200/90 rounded-2xl shadow-xs transition-all duration-300">
         {/* Gender-Anatomy Mismatch Warning & One-Click Sanitizer Bar */}
         {genderMismatch?.hasMismatch && (
           <div className="bg-amber-50 border-b border-amber-300 px-4 py-2 flex items-center justify-between flex-wrap gap-2 text-amber-950 text-xs animate-fadeIn">

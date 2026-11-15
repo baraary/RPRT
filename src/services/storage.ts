@@ -342,39 +342,14 @@ export const StorageService = {
       };
 
       const data = localStorage.getItem(STORAGE_KEYS.TEMPLATES);
-      if (!data) {
+      if (data === null) {
         const seeded = seedUsageCounts(DEFAULT_TEMPLATES).list;
         localStorage.setItem(STORAGE_KEYS.TEMPLATES, JSON.stringify(seeded));
         return seeded;
       }
-      let parsed: MedicalTemplate[] = JSON.parse(data);
-
-      // Add any newly introduced default templates that aren't in localStorage yet
-      const existingIds = new Set(parsed.map((t) => t.id));
+      const rawParsed = JSON.parse(data);
+      let parsed: MedicalTemplate[] = Array.isArray(rawParsed) ? rawParsed : [];
       let modified = false;
-      DEFAULT_TEMPLATES.forEach((defTpl) => {
-        if (!existingIds.has(defTpl.id)) {
-          parsed.push(defTpl);
-          modified = true;
-        }
-      });
-
-      // Ensure each modality (mri, ct, sonography) has its default pinned templates if none are pinned for that modality yet
-      (['sonography', 'mri', 'ct'] as Modality[]).forEach((mod) => {
-        const hasPinnedForMod = parsed.some((t) => t.modality === mod && t.isPinned);
-        if (!hasPinnedForMod) {
-          const defaultPinnedIds = new Set(
-            DEFAULT_TEMPLATES.filter((d) => d.modality === mod && d.isPinned).map((d) => d.id)
-          );
-          parsed = parsed.map((t) => {
-            if (t.modality === mod && defaultPinnedIds.has(t.id)) {
-              modified = true;
-              return { ...t, isPinned: true };
-            }
-            return t;
-          });
-        }
-      });
 
       const seededRes = seedUsageCounts(parsed);
       if (seededRes.changed) {
@@ -393,6 +368,25 @@ export const StorageService = {
 
   saveTemplates(templates: MedicalTemplate[]): void {
     localStorage.setItem(STORAGE_KEYS.TEMPLATES, JSON.stringify(templates));
+  },
+
+  resetTemplatesToDefaults(): MedicalTemplate[] {
+    const seeded = DEFAULT_TEMPLATES.map((t, idx) => ({
+      ...t,
+      usageCount: typeof t.usageCount === 'number' ? t.usageCount : Math.max(1, 10 - (idx % 8)),
+    }));
+    this.saveTemplates(seeded);
+    return seeded;
+  },
+
+  deleteAllTemplates(modality: Modality | 'all' = 'all'): MedicalTemplate[] {
+    if (modality === 'all') {
+      this.saveTemplates([]);
+      return [];
+    }
+    const remaining = this.getTemplates().filter((t) => t.modality !== modality);
+    this.saveTemplates(remaining);
+    return remaining;
   },
 
   incrementTemplateUsage(id: string): MedicalTemplate[] {
@@ -491,11 +485,12 @@ export const StorageService = {
       };
 
       const data = localStorage.getItem(STORAGE_KEYS.SHORTCUTS);
-      if (!data) {
+      if (data === null) {
         localStorage.setItem(STORAGE_KEYS.SHORTCUTS, JSON.stringify(DEFAULT_SHORTCUTS));
         return DEFAULT_SHORTCUTS;
       }
-      let parsed: MedicalShortcut[] = JSON.parse(data);
+      const rawParsed = JSON.parse(data);
+      let parsed: MedicalShortcut[] = Array.isArray(rawParsed) ? rawParsed : [];
       let modified = false;
 
       parsed = parsed.map((s) => {
@@ -506,15 +501,6 @@ export const StorageService = {
         return s;
       });
 
-      const existingTriggers = new Set(parsed.map((s) => s.trigger));
-      const existingIds = new Set(parsed.map((s) => s.id));
-      const missingDefaults = DEFAULT_SHORTCUTS.filter(
-        (d) => !existingTriggers.has(d.trigger) && !existingIds.has(d.id)
-      );
-      if (missingDefaults.length > 0) {
-        parsed = [...parsed, ...missingDefaults];
-        modified = true;
-      }
       if (modified) {
         localStorage.setItem(STORAGE_KEYS.SHORTCUTS, JSON.stringify(parsed));
       }
@@ -558,204 +544,43 @@ export const StorageService = {
 
   // SAVED REPORTS (PATIENT ARCHIVE)
   generateSampleReports(): MedicalReport[] {
-    const now = new Date();
-    const todayIso = now.toISOString();
-    const threeDaysAgoIso = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
-    const tenDaysAgoIso = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
-    const fortyFiveDaysAgoIso = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString();
-
-    let todayFa = '۱۴۰۴/۰۸/۲۱';
-    let threeDaysFa = '۱۴۰۴/۰۸/۱۸';
-    let tenDaysFa = '۱۴۰۴/۰۸/۱۱';
-    let fortyFiveDaysFa = '۱۴۰۴/۰۷/۰۶';
-    try {
-      todayFa = new Intl.DateTimeFormat('fa-IR-u-nu-latn').format(now);
-      threeDaysFa = new Intl.DateTimeFormat('fa-IR-u-nu-latn').format(new Date(Date.now() - 3 * 24 * 60 * 60 * 1000));
-      tenDaysFa = new Intl.DateTimeFormat('fa-IR-u-nu-latn').format(new Date(Date.now() - 10 * 24 * 60 * 60 * 1000));
-      fortyFiveDaysFa = new Intl.DateTimeFormat('fa-IR-u-nu-latn').format(new Date(Date.now() - 45 * 24 * 60 * 60 * 1000));
-    } catch {}
-
-    return [
-      {
-        id: 'rep-sample-today-1',
-        doctorId: 'doc-1',
-        typistId: 'typ-1',
-        typistName: 'خانم رضایی',
-        status: 'printed',
-        isLocked: true,
-        createdAt: todayIso,
-        updatedAt: todayIso,
-        patientInfo: {
-          fullName: 'سارا محمدی',
-          nationalId: '۰۰۲۱۴۵۸۹۶۳',
-          age: '۳۴',
-          gender: 'female',
-          admissionNumber: 'ADM-8921',
-          reportDate: todayFa,
-          referringPhysician: 'دکتر علوی (متخصص داخلی)',
-        },
-        studies: [
-          {
-            id: 'study-sample-1',
-            modality: 'sonography',
-            titleAndTechnique: 'سونوگرافی کامل شکم و لگن با پروب کانوکس ۳.۵ مگاهرتز',
-            findingsHtml: '<p><strong>کبد:</strong> دارای ابعاد و لبه‌های طبیعی است. اکوپترن پارانشیم هموژن و فاقد ضایعه فضاگیر است.</p><p><strong>کیسه صفرا:</strong> جدار نازک و فاقد سنگ یا لجن صفراوی.</p><p><strong>کلیه‌ها و مثانه:</strong> وضعیت و اندازه نرمال، بدون سنگ یا هیدرونفروز.</p>',
-            showComparison: false,
-            comparison: '',
-            showImpression: true,
-            impressionHtml: '<p>بررسی سونوگرافی شکم و لگن نرمال فیزیولوژیک می‌باشد.</p>',
-            showRecommendations: false,
-            recommendationsHtml: '',
-          },
-        ],
-        revisions: [
-          {
-            id: 'rev-sample-1',
-            version: 1,
-            savedAt: todayIso,
-            savedAtFa: `${todayFa} - ۱۰:۱۵`,
-            typistName: 'خانم رضایی',
-            status: 'printed',
-            note: 'نسخه چاپ‌شده و تحویل به بیمار',
-            studies: [
-              {
-                id: 'study-sample-1',
-                modality: 'sonography',
-                titleAndTechnique: 'سونوگرافی کامل شکم و لگن با پروب کانوکس ۳.۵ مگاهرتز',
-                findingsHtml: '<p><strong>کبد:</strong> دارای ابعاد و لبه‌های طبیعی است. اکوپترن پارانشیم هموژن و فاقد ضایعه فضاگیر است.</p><p><strong>کیسه صفرا:</strong> جدار نازک و فاقد سنگ یا لجن صفراوی.</p><p><strong>کلیه‌ها و مثانه:</strong> وضعیت و اندازه نرمال، بدون سنگ یا هیدرونفروز.</p>',
-                showComparison: false,
-                comparison: '',
-                showImpression: true,
-                impressionHtml: '<p>بررسی سونوگرافی شکم و لگن نرمال فیزیولوژیک می‌باشد.</p>',
-                showRecommendations: false,
-                recommendationsHtml: '',
-              },
-            ],
-          },
-        ],
-      },
-      {
-        id: 'rep-sample-month-1',
-        doctorId: 'doc-3',
-        typistId: 'typ-2',
-        typistName: 'خانم حسینی',
-        status: 'finalized',
-        createdAt: threeDaysAgoIso,
-        updatedAt: threeDaysAgoIso,
-        patientInfo: {
-          fullName: 'محمدرضا علیزاده',
-          nationalId: '۰۳۸۴۷۱۲۹۰۱',
-          age: '۴۷',
-          gender: 'male',
-          admissionNumber: 'ADM-8740',
-          reportDate: threeDaysFa,
-          referringPhysician: 'دکتر صابری (متخصص مغز و اعصاب)',
-        },
-        studies: [
-          {
-            id: 'study-sample-2',
-            modality: 'mri',
-            titleAndTechnique: 'MRI مغز بدون تزریق با سکانس‌های Sagittal T1, Axial T2, FLAIR, DWI',
-            findingsHtml: '<p>ساختار مغز و تمایز ماده سفید و خاکستری طبیعی است. افت دیفیوژن حاد (DWI Restriction) رویت نشد. شیفت خط وسط مشاهده نمی‌شود.</p>',
-            showComparison: false,
-            comparison: '',
-            showImpression: true,
-            impressionHtml: '<p>ام‌آر‌آی مغز در حد نرمال فیزیولوژیک سن بیمار می‌باشد.</p>',
-            showRecommendations: false,
-            recommendationsHtml: '',
-          },
-        ],
-      },
-      {
-        id: 'rep-sample-month-2',
-        doctorId: 'doc-1',
-        typistId: 'typ-1',
-        typistName: 'خانم رضایی',
-        status: 'finalized',
-        createdAt: tenDaysAgoIso,
-        updatedAt: tenDaysAgoIso,
-        patientInfo: {
-          fullName: 'فاطمه کاظمی',
-          nationalId: '۰۰۷۹۳۸۲۱۴۵',
-          age: '۵۸',
-          gender: 'female',
-          admissionNumber: 'ADM-8512',
-          reportDate: tenDaysFa,
-          referringPhysician: 'دکتر معتمدی (فوق تخصص ریه)',
-        },
-        studies: [
-          {
-            id: 'study-sample-3',
-            modality: 'ct',
-            titleAndTechnique: 'سی‌تی‌اسکن قفسه سینه با مقاطع نازک (HRCT) با پروتکل استاندارد',
-            findingsHtml: '<p>در پارانشیم هر دو ریه تصویر ندول یا توده فضاگیر رویت نشد. شواهدی از گراند گلاس، برونشکتازی یا کدورت آلوئولار مشاهده نمی‌شود. لنفادنوپاتی مدیاستینال دیده نشد.</p>',
-            showComparison: false,
-            comparison: '',
-            showImpression: true,
-            impressionHtml: '<p>بررسی HRCT قفسه سینه شواهدی از بیماری فعال پارانشیمال نشان نمی‌دهد.</p>',
-            showRecommendations: false,
-            recommendationsHtml: '',
-          },
-        ],
-      },
-      {
-        id: 'rep-sample-year-1',
-        doctorId: 'doc-2',
-        typistId: 'typ-3',
-        typistName: 'آقای مرادی',
-        status: 'finalized',
-        createdAt: fortyFiveDaysAgoIso,
-        updatedAt: fortyFiveDaysAgoIso,
-        patientInfo: {
-          fullName: 'امیرحسین کریمی',
-          nationalId: '۰۰۱۸۲۴۷۳۹۲',
-          age: '۲۹',
-          gender: 'male',
-          admissionNumber: 'ADM-7820',
-          reportDate: fortyFiveDaysFa,
-          referringPhysician: 'دکتر شمس (جراح ارتوپدی)',
-        },
-        studies: [
-          {
-            id: 'study-sample-4',
-            modality: 'mri',
-            titleAndTechnique: 'MRI زانوی راست با پروتکل استاندارد در مقاطع Sagittal, Coronal و Axial',
-            findingsHtml: '<p>مینیسک داخلی سالم است. در شاخ خلفی مینیسک خارجی تغییر سیگنال خطی هماهنگ با پارگی گرید ۳ رویت شد. کشیدگی ACL مشهود است.</p>',
-            showComparison: false,
-            comparison: '',
-            showImpression: true,
-            impressionHtml: '<p>پارگی شاخ خلفی مینیسک خارجی (Lateral Meniscal Tear).</p>',
-            showRecommendations: false,
-            recommendationsHtml: '',
-          },
-        ],
-      },
-    ];
+    return [];
   },
 
   getSavedReports(): MedicalReport[] {
-    if (inMemoryReportsArchive && inMemoryReportsArchive.length > 0) {
+    // One-time cleanup to remove previously seeded/test archive reports as requested
+    try {
+      if (typeof localStorage !== 'undefined' && !localStorage.getItem('radioreport_archive_purged_v2')) {
+        localStorage.setItem('radioreport_archive_purged_v2', 'true');
+        localStorage.setItem(STORAGE_KEYS.REPORTS, JSON.stringify([]));
+        inMemoryReportsArchive = [];
+        return [];
+      }
+    } catch {}
+
+    if (inMemoryReportsArchive !== null) {
       return inMemoryReportsArchive;
     }
     try {
       const data = localStorage.getItem(STORAGE_KEYS.REPORTS);
       if (!data) {
-        const samples = this.generateSampleReports();
-        persistReportsToHotCache(samples);
-        return samples;
+        persistReportsToHotCache([]);
+        return [];
       }
       const parsed = JSON.parse(data);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        inMemoryReportsArchive = parsed;
-        return parsed;
+      if (Array.isArray(parsed)) {
+        const cleaned = parsed.filter((r) => r && r.id && !String(r.id).startsWith('rep-sample-'));
+        inMemoryReportsArchive = cleaned;
+        if (cleaned.length !== parsed.length) {
+          persistReportsToHotCache(cleaned);
+        }
+        return cleaned;
       }
-      const samples = this.generateSampleReports();
-      persistReportsToHotCache(samples);
-      return samples;
+      persistReportsToHotCache([]);
+      return [];
     } catch {
-      const samples = this.generateSampleReports();
-      inMemoryReportsArchive = samples;
-      return samples;
+      inMemoryReportsArchive = [];
+      return [];
     }
   },
 

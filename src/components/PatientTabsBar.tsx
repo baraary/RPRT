@@ -121,11 +121,11 @@ export const PatientTabsBar: React.FC<PatientTabsBarProps> = ({
   return (
     <div
       id="app-patient-tabs-bar"
-      style={{ top: 'var(--navbar-height, 102px)' }}
-      className="sticky z-30 w-full pt-1.5 no-print select-none transition-all duration-300"
+      style={{ top: 'var(--navbar-height, 52px)' }}
+      className="group/tabsbar sticky z-30 w-full pt-0 no-print select-none transition-all duration-200"
     >
       <div className="w-full max-w-[1680px] 2xl:max-w-[1840px] mx-auto px-4 sm:px-6 lg:px-8 2xl:px-10">
-        <div className="w-full bg-slate-900/95 backdrop-blur-md text-slate-200 border border-b-0 border-slate-800 rounded-t-2xl px-2.5 py-1 flex items-center justify-between gap-1.5 shadow-xs">
+        <div className="w-full bg-slate-900/95 backdrop-blur-md text-slate-200 border border-t-0 border-slate-800 rounded-b-2xl rounded-t-none group-[.is-quickbar-docked]/tabsbar:rounded-b-none px-2.5 py-1.5 flex items-center justify-between gap-1.5 shadow-xs transition-all duration-150">
           {/* Scroll Right Button (For Hospital Mice without Horizontal Scroll) */}
           {!isMultiLineWrap && tabs.length > 2 && (
             <button

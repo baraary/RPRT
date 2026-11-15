@@ -520,6 +520,15 @@ span.rad-slot.active-rad-slot {
   line-height: inherit !important;
 }
 
+.printable-report .study-heading,
+.study-heading,
+.printable-findings-content h1,
+.printable-findings-content h2,
+.printable-findings-content h3 {
+  font-family: var(--heading-font-family, 'Vazirmatn', sans-serif) !important;
+  font-size: var(--heading-font-size, 16px) !important;
+}
+
 /* Printable report styles */
 @media print {
   mark.spell-issue-highlight,

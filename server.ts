@@ -264,20 +264,25 @@ ${fullReport}
 // Multi-Typist Local Network (LAN) Shared SQLite Database Sync Endpoints
 import fs from 'fs';
 import os from 'os';
-import Database from 'better-sqlite3';
+import { createRequire } from 'module';
 
+const requireModule = createRequire(import.meta.url);
 const LAN_DATA_DIR = path.join(__dirname, 'data');
 const LAN_SQLITE_FILE = path.join(LAN_DATA_DIR, 'radioreport_lan.sqlite');
 const LAN_JSON_FALLBACK_FILE = path.join(LAN_DATA_DIR, 'lan_shared_db.json');
 
-let sqliteDb: Database.Database | null = null;
+let sqliteDb: any = null;
+let sqliteInitAttempted = false;
 
-function initSqliteLanDb(): Database.Database | null {
+function initSqliteLanDb(): any {
   if (sqliteDb) return sqliteDb;
+  if (sqliteInitAttempted) return null;
+  sqliteInitAttempted = true;
   try {
     if (!fs.existsSync(LAN_DATA_DIR)) {
       fs.mkdirSync(LAN_DATA_DIR, { recursive: true });
     }
+    const Database = requireModule('better-sqlite3');
     const db = new Database(LAN_SQLITE_FILE);
     db.pragma('journal_mode = WAL');
     db.exec(`

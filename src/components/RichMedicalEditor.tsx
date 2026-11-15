@@ -1212,7 +1212,11 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
         ? navEl.getBoundingClientRect().bottom
         : 0;
       const quickTop = quickEl.getBoundingClientRect().top;
-      setIsQuickbarDocked(window.scrollY > 15 && quickTop <= anchorBottom + 3);
+      const docked = window.scrollY > 15 && quickTop <= anchorBottom + 3;
+      setIsQuickbarDocked(docked);
+      if (tabsEl) {
+        tabsEl.classList.toggle('is-quickbar-docked', docked);
+      }
     };
 
     handleScrollDockCheck();
@@ -1221,6 +1225,8 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
     return () => {
       window.removeEventListener('scroll', handleScrollDockCheck);
       window.removeEventListener('resize', handleScrollDockCheck);
+      const tabsEl = document.getElementById('app-patient-tabs-bar');
+      if (tabsEl) tabsEl.classList.remove('is-quickbar-docked');
     };
   }, [zenMode]);
 
@@ -1318,7 +1324,7 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
         id="app-editor-quickbar"
         ref={quickbarRef}
         style={{
-          top: 'calc(var(--navbar-height, 102px) + var(--tabsbar-height, 44px) - 1px)',
+          top: 'calc(var(--navbar-height, 52px) + var(--tabsbar-height, 42px) - 1px)',
         }}
         className={`w-full sticky z-28 pb-1 space-y-1.5 no-print ${
           isQuickbarDocked ? 'pt-0' : 'pt-0.5'
@@ -1336,7 +1342,7 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
             <button
               type="button"
               onClick={() => onOpenTemplates(activeStudyId)}
-              className={`h-7 px-2.5 rounded-xl inline-flex items-center justify-center gap-1.5 text-[11px] font-bold border whitespace-nowrap transition-all duration-200 active:scale-95 cursor-pointer ${activeTheme.primaryBtn}`}
+              className={`h-7 px-3 rounded-xl inline-flex items-center justify-center gap-1.5 text-[11px] font-bold border whitespace-nowrap transition-all duration-150 cursor-pointer ${activeTheme.primaryBtn}`}
               title="مشاهده و درج قالب‌های آماده پزشکان برای این تصویربرداری"
             >
               <Layers className="w-3.5 h-3.5 shrink-0" />
@@ -1348,10 +1354,10 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
               <button
                 type="button"
                 onClick={() => onStartQuickSaveAsTemplate(activeStudyId || studies[0]?.id || '')}
-                className={`h-7 px-2.5 rounded-xl inline-flex items-center justify-center gap-1.5 text-[11px] font-bold border whitespace-nowrap transition-all duration-200 active:scale-95 cursor-pointer ${activeTheme.secondaryBtn}`}
+                className="h-7 px-2.5 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-700 hover:text-slate-900 border border-slate-200/90 inline-flex items-center justify-center gap-1.5 text-[11px] font-semibold whitespace-nowrap transition-all duration-150 cursor-pointer"
                 title="ذخیره مستقیم متن تایپ‌شده فعلی به عنوان قالب آماده جدید (در یک مرحله)"
               >
-                <BookmarkPlus className="w-3.5 h-3.5 shrink-0" />
+                <BookmarkPlus className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                 <span>+ ذخیره گزارش در قالب‌ها</span>
               </button>
             )}
@@ -1359,7 +1365,7 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
             <button
               type="button"
               onClick={() => onOpenShortcuts('all')}
-              className="h-7 px-2.5 bg-white hover:bg-teal-50 text-slate-700 hover:text-teal-900 border border-slate-200 hover:border-teal-300 rounded-xl inline-flex items-center justify-center gap-1.5 text-[11px] font-bold whitespace-nowrap shadow-2xs transition-all duration-200 active:scale-95 cursor-pointer"
+              className="h-7 px-2.5 bg-slate-50 hover:bg-slate-100 text-slate-700 hover:text-slate-900 border border-slate-200/90 rounded-xl inline-flex items-center justify-center gap-1.5 text-[11px] font-semibold whitespace-nowrap transition-all duration-150 cursor-pointer"
               title="مدیریت یکپارچه جملات اعضا، کدهای شورتکات (Space) و میانبرهای کیبورد"
             >
               <Zap className="w-3.5 h-3.5 text-amber-500 shrink-0" />
@@ -1372,12 +1378,12 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowSlotInsertMenu((prev) => !prev)}
-                  className="h-7 px-2.5 bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200 hover:border-sky-300 rounded-lg inline-flex items-center justify-center gap-1.5 text-[11px] font-bold whitespace-nowrap shadow-2xs transition-all duration-200 cursor-pointer active:scale-95"
+                  className="h-7 px-2.5 bg-slate-50 hover:bg-slate-100 text-slate-700 hover:text-slate-900 border border-slate-200/90 rounded-xl inline-flex items-center justify-center gap-1.5 text-[11px] font-semibold whitespace-nowrap transition-all duration-150 cursor-pointer"
                   title="افزودن فیلد جایگذاری عدد در متن فایل خام بدون به هم ریختن متن"
                 >
                   <Hash className="w-3.5 h-3.5 text-sky-600 shrink-0" />
                   <span>+ درج فیلد عدد</span>
-                  <ChevronDown className="w-3 h-3 text-sky-600 shrink-0" />
+                  <ChevronDown className="w-3 h-3 text-slate-400 shrink-0" />
                 </button>
 
                 {showSlotInsertMenu && (
@@ -1454,16 +1460,16 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
             )}
 
             {/* Spell & Half-Space Checker + 1-Click Automated Text Cleanup Group */}
-            <div className="inline-flex items-center rounded-lg border border-slate-200 bg-white shadow-2xs overflow-hidden">
+            <div className="inline-flex items-center rounded-xl border border-slate-200/90 bg-slate-50 overflow-hidden">
               <button
                 type="button"
                 onClick={handleHighlightSpellIssues}
-                className="h-7 px-2.5 hover:bg-amber-50 text-slate-700 hover:text-amber-900 inline-flex items-center justify-center gap-1.5 text-[11px] font-bold whitespace-nowrap transition-colors duration-150 cursor-pointer"
+                className="h-7 px-2.5 hover:bg-slate-100 text-slate-700 hover:text-slate-900 inline-flex items-center justify-center gap-1.5 text-[11px] font-semibold whitespace-nowrap transition-colors duration-150 cursor-pointer"
                 title="هایلایت کردن غلط‌های املایی، نیم‌فاصله‌ها و کلمات تکراری در متن (Alt+C)"
               >
                 <SpellCheck className="w-3.5 h-3.5 text-teal-600 shrink-0" />
                 <span>بررسی املا و نیم‌فاصله</span>
-                <kbd className="bg-slate-100 text-slate-600 border border-slate-200 px-1 py-0.2 rounded text-[9.5px] font-mono">
+                <kbd className="bg-white text-slate-500 border border-slate-200 px-1 py-0.2 rounded text-[9.5px] font-mono">
                   Alt+C
                 </kbd>
               </button>
@@ -1471,10 +1477,10 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
               <button
                 type="button"
                 onClick={handleAutoCleanMedicalText}
-                className="h-7 px-2.5 bg-teal-50/70 hover:bg-teal-600 text-teal-800 hover:text-white inline-flex items-center justify-center gap-1 text-[11px] font-bold whitespace-nowrap transition-colors duration-150 cursor-pointer"
+                className="h-7 px-2.5 hover:bg-teal-600 text-slate-700 hover:text-white inline-flex items-center justify-center gap-1 text-[11px] font-semibold whitespace-nowrap transition-colors duration-150 cursor-pointer"
                 title="پاکسازی خودکار متن با یک کلیک: حذف کلمات تکراری متوالی، حذف فاصله‌های اضافه (Space) و اصلاح نیم‌فاصله‌ها"
               >
-                <Wand2 className="w-3 h-3 shrink-0" />
+                <Wand2 className="w-3 h-3 text-teal-600 group-hover:text-white shrink-0" />
                 <span>پاکسازی خودکار متن</span>
               </button>
             </div>
@@ -1483,12 +1489,12 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
             <button
               type="button"
               onClick={() => setIsSplitComparisonOpen((prev) => !prev)}
-              className={`h-7 px-2.5 rounded-lg inline-flex items-center justify-center gap-1.5 text-[11px] font-bold border whitespace-nowrap transition-all duration-200 cursor-pointer active:scale-95 ${
+              className={`h-7 px-2.5 rounded-xl inline-flex items-center justify-center gap-1.5 text-[11px] font-semibold border whitespace-nowrap transition-all duration-150 cursor-pointer ${
                 isSplitComparisonOpen
-                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
                   : exactPatientPriorCount > 0
-                  ? 'bg-indigo-50 text-indigo-900 border-indigo-300 hover:bg-indigo-100'
-                  : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200'
+                  ? 'bg-indigo-50 text-indigo-900 border-indigo-200 hover:bg-indigo-100 font-bold'
+                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200/90'
               }`}
               title="نمای دوبرگه کنار هم: مشاهده گزارش قبلی بیمار در کنار گزارش فعلی و مقایسه یافته‌ها"
             >
@@ -1504,10 +1510,10 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
               <button
                 type="button"
                 onClick={onToggleZenMode}
-                className={`h-7 px-2.5 rounded-lg inline-flex items-center justify-center gap-1.5 text-[11px] font-bold border whitespace-nowrap transition-all duration-200 cursor-pointer active:scale-95 ${
+                className={`h-7 px-2.5 rounded-xl inline-flex items-center justify-center gap-1.5 text-[11px] font-semibold border whitespace-nowrap transition-all duration-150 cursor-pointer ${
                   zenMode
-                    ? 'bg-teal-600 text-white border-teal-600 shadow-xs'
-                    : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200'
+                    ? 'bg-teal-600 text-white border-teal-600 shadow-2xs'
+                    : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200/90'
                 }`}
                 title="حالت تمرکز کامل تایپ: مخفی کردن پنل‌های جانبی و مشخصات بیمار برای تمرکز ۱۰۰٪ روی متن (Alt+F)"
               >
@@ -1525,7 +1531,7 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
               <button
                 type="button"
                 onClick={() => setIsVersionHistoryModalOpen(true)}
-                className="h-7 px-2.5 rounded-lg inline-flex items-center justify-center gap-1.5 text-[11px] font-bold border bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border-indigo-200 whitespace-nowrap transition-all duration-200 cursor-pointer active:scale-95"
+                className="h-7 px-2.5 rounded-xl inline-flex items-center justify-center gap-1.5 text-[11px] font-semibold border bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200/90 whitespace-nowrap transition-all duration-150 cursor-pointer"
                 title="مشاهده تاریخچه نسخه‌ها و اصلاحیه‌های این گزارش و بازگردانی به نسخه قبلی"
               >
                 <History className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
@@ -1540,10 +1546,10 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
               <button
                 type="button"
                 onClick={() => handleAutoWrapStudyNumbers(activeStudy)}
-                className="h-7 px-2.5 bg-sky-600 hover:bg-sky-700 text-white rounded-lg inline-flex items-center justify-center gap-1.5 text-[11px] font-bold whitespace-nowrap shadow-xs transition-all duration-200 cursor-pointer active:scale-95"
+                className="h-7 px-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl inline-flex items-center justify-center gap-1.5 text-[11px] font-semibold whitespace-nowrap shadow-2xs transition-all duration-150 cursor-pointer"
                 title="تمام اعداد و اندازه‌های موجود در متن فعلی را به کادرهای جایگذاری مجزا تبدیل می‌کند"
               >
-                <SlidersHorizontal className="w-3 h-3 text-sky-200 shrink-0" />
+                <SlidersHorizontal className="w-3 h-3 text-sky-300 shrink-0" />
                 <span>تبدیل اعداد به فیلد</span>
               </button>
             </div>

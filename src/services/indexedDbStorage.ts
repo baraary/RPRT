@@ -75,11 +75,20 @@ export const IndexedDbService = {
         } catch {}
       }
 
+      // One-time cleanup of IndexedDB archive if purged
+      if (typeof localStorage !== 'undefined' && !localStorage.getItem('radioreport_idb_purged_v2')) {
+        localStorage.setItem('radioreport_idb_purged_v2', 'true');
+        await this.setItem('reports', []);
+      }
+
       const localReports = StorageService.getSavedReports();
-      const idbReports = await this.getItem<any[]>('reports');
+      const rawIdbReports = await this.getItem<any[]>('reports');
+      const idbReports = Array.isArray(rawIdbReports)
+        ? rawIdbReports.filter((r) => r && r.id && !String(r.id).startsWith('rep-sample-'))
+        : [];
 
       let restoredFromIdb = false;
-      if (idbReports && Array.isArray(idbReports) && idbReports.length > 0) {
+      if (idbReports.length > 0) {
         if (localReports.length === 0 || idbReports.length > localReports.length) {
           // Merge localReports + idbReports by id so no report is ever lost
           const map = new Map<string, any>();

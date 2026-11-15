@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Typist, MedicalReport } from '../types';
 import {
   BarChart3,
@@ -15,6 +15,7 @@ import {
   FileText,
   Check,
   Users,
+  Pencil,
 } from 'lucide-react';
 
 interface TypistAnalyticsModalProps {
@@ -24,8 +25,10 @@ interface TypistAnalyticsModalProps {
   activeTypistId: string;
   onSelectTypist: (typistId: string) => void;
   onAddTypist: (typist: Omit<Typist, 'id'>) => void;
+  onUpdateTypist?: (typistId: string, updates: Partial<Typist>) => void;
   onDeleteTypist: (typistId: string) => void;
   reports: MedicalReport[];
+  initialTab?: 'analytics' | 'manage';
 }
 
 type PeriodFilter = 'daily' | 'weekly' | 'monthly' | 'all';
@@ -87,10 +90,12 @@ export const TypistAnalyticsModal: React.FC<TypistAnalyticsModalProps> = ({
   activeTypistId,
   onSelectTypist,
   onAddTypist,
+  onUpdateTypist,
   onDeleteTypist,
   reports,
+  initialTab = 'analytics',
 }) => {
-  const [activeTab, setActiveTab] = useState<'analytics' | 'manage'>('analytics');
+  const [activeTab, setActiveTab] = useState<'analytics' | 'manage'>(initialTab);
   const [period, setPeriod] = useState<PeriodFilter>('daily');
   const [selectedSpecificDate, setSelectedSpecificDate] = useState<string>('');
   const [selectedMonth, setSelectedMonth] = useState<string>('current');
@@ -98,6 +103,33 @@ export const TypistAnalyticsModal: React.FC<TypistAnalyticsModalProps> = ({
   // New Typist form state (only name & color)
   const [newName, setNewName] = useState('');
   const [newColor, setNewColor] = useState('sky');
+
+  // Inline Edit Typist state
+  const [editingTypistId, setEditingTypistId] = useState<string | null>(null);
+  const [editTypistName, setEditTypistName] = useState('');
+  const [editTypistColor, setEditTypistColor] = useState('sky');
+
+  useEffect(() => {
+    if (isOpen) {
+      setActiveTab(initialTab);
+      setEditingTypistId(null);
+    }
+  }, [isOpen, initialTab]);
+
+  const handleStartEditTypist = (t: Typist) => {
+    setEditingTypistId(t.id);
+    setEditTypistName(t.name);
+    setEditTypistColor(t.color || 'sky');
+  };
+
+  const handleSaveEditTypist = (typistId: string) => {
+    if (!editTypistName.trim() || !onUpdateTypist) return;
+    onUpdateTypist(typistId, {
+      name: editTypistName.trim(),
+      color: editTypistColor,
+    });
+    setEditingTypistId(null);
+  };
 
   // Compute current Persian dates
   const { todayFa, yesterdayFa, thisMonthFa } = useMemo(() => {
@@ -851,51 +883,136 @@ export const TypistAnalyticsModal: React.FC<TypistAnalyticsModalProps> = ({
               </div>
             </form>
 
-            {/* Existing Typists List */}
+            {/* Existing Typists List with Inline Edit Support */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {typists.map((t) => {
                 const isActive = t.id === activeTypistId;
+                const isEditing = editingTypistId === t.id;
                 const cStyle = TYPIST_COLOR_MAP[t.color] || TYPIST_COLOR_MAP.sky;
                 return (
                   <div
                     key={t.id}
-                    className={`p-3.5 rounded-2xl border bg-white flex items-center justify-between transition-all ${
+                    className={`p-3.5 rounded-2xl border bg-white transition-all ${
                       isActive ? cStyle.ring : 'border-slate-200'
                     }`}
                   >
-                    <div className="flex items-center gap-3">
-                      <div
-                        className={`w-9 h-9 rounded-xl font-bold text-sm flex items-center justify-center ${cStyle.avatar}`}
-                      >
-                        {t.name.slice(0, 1)}
+                    {isEditing ? (
+                      <div className="space-y-3 animate-fadeIn">
+                        <div className="text-[11px] font-black text-teal-900 flex items-center gap-1.5">
+                          <Pencil className="w-3.5 h-3.5 text-teal-600" />
+                          <span>ویرایش مشخصات تایپیست:</span>
+                        </div>
+                        <input
+                          type="text"
+                          autoFocus
+                          value={editTypistName}
+                          onChange={(e) => setEditTypistName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleSaveEditTypist(t.id);
+                            }
+                          }}
+                          placeholder="نام تایپیست..."
+                          className="w-full text-xs p-2 rounded-xl border border-slate-300 bg-white font-bold focus:border-teal-500 focus:outline-none"
+                        />
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[11px] font-semibold text-slate-600">رنگ:</span>
+                            {(['sky', 'indigo', 'emerald', 'amber', 'rose', 'purple'] as const).map(
+                              (col) => {
+                                const c = TYPIST_COLOR_MAP[col];
+                                return (
+                                  <button
+                                    key={col}
+                                    type="button"
+                                    onClick={() => setEditTypistColor(col)}
+                                    className={`w-5 h-5 rounded-md ${c.bar} flex items-center justify-center transition-transform cursor-pointer ${
+                                      editTypistColor === col
+                                        ? 'scale-110 ring-2 ring-slate-900 ring-offset-1'
+                                        : 'opacity-65 hover:opacity-100'
+                                    }`}
+                                  >
+                                    {editTypistColor === col && (
+                                      <Check className="w-3 h-3 text-white" />
+                                    )}
+                                  </button>
+                                );
+                              }
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setEditingTypistId(null)}
+                              className="px-2.5 py-1 rounded-lg text-xs font-semibold text-slate-600 hover:bg-slate-100 cursor-pointer"
+                            >
+                              انصراف
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSaveEditTypist(t.id)}
+                              className="px-3 py-1 rounded-lg text-xs font-bold bg-teal-600 hover:bg-teal-700 text-white cursor-pointer inline-flex items-center gap-1"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                              <span>ذخیره</span>
+                            </button>
+                          </div>
+                        </div>
                       </div>
-                      <div className="text-xs font-black text-slate-900">{t.name}</div>
-                    </div>
+                    ) : (
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <div className="flex items-center gap-3">
+                          <div
+                            className={`w-9 h-9 rounded-xl font-bold text-sm flex items-center justify-center shrink-0 ${cStyle.avatar}`}
+                          >
+                            {t.name.slice(0, 1)}
+                          </div>
+                          <div>
+                            <div className="text-xs font-black text-slate-900">{t.name}</div>
+                            <div className="text-[10.5px] text-slate-500 mt-0.5">اپراتور تایپ مرکز</div>
+                          </div>
+                        </div>
 
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => onSelectTypist(t.id)}
-                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
-                          isActive
-                            ? 'bg-emerald-600 text-white'
-                            : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-                        }`}
-                      >
-                        {isActive ? '✓ تایپیست فعال' : 'انتخاب به عنوان فعال'}
-                      </button>
+                        <div className="flex items-center gap-1.5">
+                          {onUpdateTypist && (
+                            <button
+                              type="button"
+                              onClick={() => handleStartEditTypist(t)}
+                              className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 inline-flex items-center gap-1 transition-colors cursor-pointer"
+                              title="ویرایش نام و رنگ تایپیست"
+                            >
+                              <Pencil className="w-3 h-3" />
+                              <span>ویرایش</span>
+                            </button>
+                          )}
 
-                      {typists.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => onDeleteTypist(t.id)}
-                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                          title="حذف تایپیست"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
+                          <button
+                            type="button"
+                            onClick={() => onSelectTypist(t.id)}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
+                              isActive
+                                ? 'bg-emerald-600 text-white'
+                                : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                            }`}
+                          >
+                            {isActive ? '✓ تایپیست فعال' : 'انتخاب به عنوان فعال'}
+                          </button>
+
+                          {typists.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => onDeleteTypist(t.id)}
+                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                              title="حذف تایپیست"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}

@@ -85,6 +85,12 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   );
   const [headerFont, setHeaderFont] = useState(settings.headerFont || "'Vazirmatn', sans-serif");
   const [headerFontSize, setHeaderFontSize] = useState<number>(settings.headerFontSize || 18);
+  const [headingFont, setHeadingFont] = useState(
+    settings.headingFont || settings.defaultFont || "'Vazirmatn', sans-serif"
+  );
+  const [headingFontSize, setHeadingFontSize] = useState<number>(
+    parseInt(String(settings.headingFontSize || '16'), 10) || 16
+  );
   const [bodyFont, setBodyFont] = useState(settings.defaultFont || "'Vazirmatn', sans-serif");
   const [bodyFontSize, setBodyFontSize] = useState<number>(settings.defaultFontSize || 14);
   const [qrMode, setQrMode] = useState<'url' | 'text'>('url');
@@ -102,6 +108,8 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
     if (isOpen) {
       setHeaderFont(settings.headerFont || "'Vazirmatn', sans-serif");
       setHeaderFontSize(settings.headerFontSize || 18);
+      setHeadingFont(settings.headingFont || settings.defaultFont || "'Vazirmatn', sans-serif");
+      setHeadingFontSize(parseInt(String(settings.headingFontSize || '16'), 10) || 16);
       setBodyFont(settings.defaultFont || "'Vazirmatn', sans-serif");
       setBodyFontSize(settings.defaultFontSize || 14);
       setForcePageBreakPerStudy(Boolean(settings.pageBreakPerStudy));
@@ -140,6 +148,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   };
 
   const resolvedHeaderFontCss = formatCssFontStack(headerFont);
+  const resolvedHeadingFontCss = formatCssFontStack(headingFont);
   const resolvedBodyFontCss = formatCssFontStack(bodyFont);
 
   // Shared deterministic A4 pagination engine (100% synced with RichMedicalEditor A4 meter)
@@ -296,6 +305,13 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
     .printable-header-section,
     .printable-header-section * {
       font-family: ${resolvedHeaderFontCss} !important;
+    }
+    .study-heading,
+    .study-box h1,
+    .study-box h2,
+    .study-box h3 {
+      font-family: ${resolvedHeadingFontCss} !important;
+      font-size: ${headingFontSize}px !important;
     }
     .impression-box {
       background-color: #f8fafc !important;
@@ -656,7 +672,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
               {/* 1. Live Header Font & Size Controls */}
               <div className="h-8 flex items-center gap-1 px-2 bg-slate-900/90 rounded-xl text-xs border border-slate-700">
                 <Type className="w-3.5 h-3.5 text-teal-400 shrink-0" />
-                <span className="text-[11px] text-slate-300 font-semibold">فونت و سایز سربرگ:</span>
+                <span className="text-[11px] text-slate-300 font-semibold">سربرگ:</span>
                 <select
                   value={headerFont}
                   onChange={(e) => {
@@ -682,6 +698,44 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                   title="سایز عنوان سربرگ"
                   className="h-6 text-[11px] bg-slate-800 text-white border border-slate-600 rounded px-1 font-mono font-bold cursor-pointer"
                 >
+                  <option value={15}>۱۵</option>
+                  <option value={16}>۱۶</option>
+                  <option value={18}>۱۸</option>
+                  <option value={20}>۲۰</option>
+                  <option value={22}>۲۲</option>
+                </select>
+              </div>
+
+              {/* 2. Live Report Title (Heading) Font & Size Controls */}
+              <div className="h-8 flex items-center gap-1 px-2 bg-slate-900/90 rounded-xl text-xs border border-slate-700">
+                <Type className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                <span className="text-[11px] text-slate-300 font-semibold">فونت تیتر گزارش:</span>
+                <select
+                  value={headingFont}
+                  onChange={(e) => {
+                    const nextFont = e.target.value;
+                    setHeadingFont(nextFont);
+                    onUpdateSettings?.({ headingFont: nextFont });
+                  }}
+                  className="h-6 text-[11px] bg-slate-800 text-white border border-slate-600 rounded px-1 font-bold cursor-pointer"
+                >
+                  {(settings.customFonts || []).map((f) => (
+                    <option key={f.id} value={f.family}>
+                      {f.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={headingFontSize}
+                  onChange={(e) => {
+                    const nextSize = Number(e.target.value);
+                    setHeadingFontSize(nextSize);
+                    onUpdateSettings?.({ headingFontSize: `${nextSize}px` });
+                  }}
+                  title="سایز تیتر گزارش"
+                  className="h-6 text-[11px] bg-slate-800 text-white border border-slate-600 rounded px-1 font-mono font-bold cursor-pointer"
+                >
+                  <option value={14}>۱۴</option>
                   <option value={15}>۱۵</option>
                   <option value={16}>۱۶</option>
                   <option value={18}>۱۸</option>
@@ -868,13 +922,17 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                   className={`printable-report a4-sheet-page bg-white text-slate-900 w-full max-w-[210mm] min-h-[297mm] p-6 sm:p-10 md:p-11 shadow-2xl rounded-2xl relative box-border break-words [word-break:break-word] shrink-0 flex flex-col justify-between animate-fadeSlideUp ${
                     monochromePrintMode ? 'grayscale contrast-125' : ''
                   }`}
-                  style={{
-                    fontFamily: resolvedBodyFontCss,
-                    fontSize: `${bodyFontSize || 14}px`,
-                    lineHeight: unifiedLineHeight,
-                    direction: 'rtl',
-                    paddingTop: preprintedLetterheadMode ? `${preprintedTopMarginMm}mm` : undefined,
-                  }}
+                  style={
+                    {
+                      '--heading-font-family': resolvedHeadingFontCss,
+                      '--heading-font-size': `${headingFontSize}px`,
+                      fontFamily: resolvedBodyFontCss,
+                      fontSize: `${bodyFontSize || 14}px`,
+                      lineHeight: unifiedLineHeight,
+                      direction: 'rtl',
+                      paddingTop: preprintedLetterheadMode ? `${preprintedTopMarginMm}mm` : undefined,
+                    } as React.CSSProperties
+                  }
                 >
                   {/* TOP SECTION: Official Clinic Letterhead + Patient Demographics Box */}
                   <header
@@ -1027,10 +1085,10 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                           {/* Study Title & Technique Header */}
                           <div className="mb-2">
                             <h2
-                              className="font-black"
+                              className="study-heading font-black"
                               style={{
-                                fontFamily: resolvedBodyFontCss,
-                                fontSize: `${Math.round((bodyFontSize || 14) + 2)}px`,
+                                fontFamily: resolvedHeadingFontCss,
+                                fontSize: `${headingFontSize}px`,
                                 color: monochromePrintMode ? '#000000' : studyModColor,
                                 fontWeight: settings.headingBold ? 900 : 700,
                               }}
@@ -1090,8 +1148,12 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                               }}
                             >
                               <div
-                                className="font-black text-sm mb-1 flex items-center gap-1.5"
-                                style={{ color: monochromePrintMode ? '#000000' : studyModColor }}
+                                className="study-heading font-black text-sm mb-1 flex items-center gap-1.5"
+                                style={{
+                                  fontFamily: resolvedHeadingFontCss,
+                                  fontSize: `${Math.max(13, headingFontSize - 1)}px`,
+                                  color: monochromePrintMode ? '#000000' : studyModColor,
+                                }}
                               >
                                 <ShieldCheck className="w-4 h-4 shrink-0" />
                                 <span>نتیجه‌گیری نهایی (Impression):</span>

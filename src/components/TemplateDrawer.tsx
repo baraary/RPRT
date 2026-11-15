@@ -10,6 +10,8 @@ import {
   Trash2,
   Check,
   BookmarkPlus,
+  Pencil,
+  RotateCcw,
 } from 'lucide-react';
 
 interface TemplateDrawerProps {
@@ -23,7 +25,10 @@ interface TemplateDrawerProps {
   onSelectTemplate: (template: MedicalTemplate, append: boolean) => void;
   onAddAsNewStudy?: (template: MedicalTemplate) => void;
   onCloneTemplate: (template: MedicalTemplate) => void;
+  onUpdateTemplate?: (templateId: string, updates: Partial<MedicalTemplate>) => void;
   onDeleteTemplate: (templateId: string) => void;
+  onDeleteAllTemplates?: (modality: Modality | 'all') => void;
+  onResetDefaultTemplates?: () => void;
   onQuickSaveCurrentAsTemplate?: (title: string, doctorId: string, pin?: boolean) => void;
   defaultSuggestedTitle?: string;
 }
@@ -39,7 +44,10 @@ export const TemplateDrawer: React.FC<TemplateDrawerProps> = ({
   onSelectTemplate,
   onAddAsNewStudy,
   onCloneTemplate,
+  onUpdateTemplate,
   onDeleteTemplate,
+  onDeleteAllTemplates,
+  onResetDefaultTemplates,
   onQuickSaveCurrentAsTemplate,
   defaultSuggestedTitle = '',
 }) => {
@@ -53,6 +61,14 @@ export const TemplateDrawer: React.FC<TemplateDrawerProps> = ({
   const [inlineTitle, setInlineTitle] = useState('');
   const [inlineDoctorId, setInlineDoctorId] = useState(activeDoctorId);
 
+  // Confirm Delete All Templates state
+  const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
+
+  // Inline Edit Template state
+  const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editDoctorId, setEditDoctorId] = useState('all');
+
   // Two-way smooth enter/exit drawer animation state
   const [rendered, setRendered] = useState(false);
   const [isClosing, setIsClosing] = useState(false);
@@ -65,6 +81,8 @@ export const TemplateDrawer: React.FC<TemplateDrawerProps> = ({
       setSelectedModalityFilter(modality);
       setInlineDoctorId(activeDoctorId);
       setInlineTitle(defaultSuggestedTitle);
+      setConfirmDeleteAll(false);
+      setEditingTemplateId(null);
     } else if (rendered) {
       setIsClosing(true);
       const timer = setTimeout(() => {
@@ -90,6 +108,21 @@ export const TemplateDrawer: React.FC<TemplateDrawerProps> = ({
     onQuickSaveCurrentAsTemplate(inlineTitle.trim(), inlineDoctorId, false);
     setInlineTitle('');
     setShowInlineSaveBox(false);
+  };
+
+  const handleStartEditTemplate = (tpl: MedicalTemplate) => {
+    setEditingTemplateId(tpl.id);
+    setEditTitle(tpl.title);
+    setEditDoctorId(tpl.doctorId || 'all');
+  };
+
+  const handleSaveEditTemplate = (tplId: string) => {
+    if (!editTitle.trim() || !onUpdateTemplate) return;
+    onUpdateTemplate(tplId, {
+      title: editTitle.trim(),
+      doctorId: editDoctorId,
+    });
+    setEditingTemplateId(null);
   };
 
   // Filter and sort templates (default: by usage frequency, optional: alphabetical)
@@ -270,23 +303,86 @@ export const TemplateDrawer: React.FC<TemplateDrawerProps> = ({
           </div>
         </div>
 
-        {/* Inline 1-Step Save Current Report as New Template (No need to close drawer!) */}
+        {/* Inline 1-Step Save Current Report as New Template + Bulk Delete / Reset Controls */}
         <div className="px-4 py-2.5 bg-teal-50/70 border-b border-teal-200/80 space-y-2.5">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-2">
             <span className="text-xs text-teal-950 font-bold">
-              تعداد قالب‌ها: {filteredTemplates.length} مورد ({sortBy === 'usage' ? 'مرتب بر اساس تکرار' : 'مرتب بر اساس الفبا'})
+              تعداد قالب‌ها: {filteredTemplates.length} مورد
             </span>
-            <button
-              type="button"
-              onClick={() => {
-                setShowInlineSaveBox((prev) => !prev);
-                if (!inlineTitle) setInlineTitle(defaultSuggestedTitle);
-              }}
-              className="h-8 inline-flex items-center gap-1.5 text-xs font-bold text-white bg-teal-600 hover:bg-teal-700 px-3 rounded-lg shadow-2xs transition-all duration-200 cursor-pointer"
-            >
-              <BookmarkPlus className="w-3.5 h-3.5" />
-              <span>{showInlineSaveBox ? 'بستن کادر ذخیره قالب' : '+ ذخیره متن فعلی به عنوان قالب آماده'}</span>
-            </button>
+
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {templates.length > 0 && onDeleteAllTemplates && (
+                <>
+                  {!confirmDeleteAll ? (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteAll(true)}
+                      className="h-8 inline-flex items-center gap-1 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-2.5 rounded-lg transition-colors cursor-pointer"
+                      title="حذف یکجای تمام قالب‌های این بخش یا کل سیستم"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>حذف همه قالب‌ها</span>
+                    </button>
+                  ) : (
+                    <div className="inline-flex items-center gap-1 bg-rose-50 border border-rose-300 px-2 py-1 rounded-xl animate-fadeIn">
+                      <span className="text-[11px] font-bold text-rose-900">حذف شود؟</span>
+                      {selectedModalityFilter !== 'all' && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onDeleteAllTemplates(selectedModalityFilter);
+                            setConfirmDeleteAll(false);
+                          }}
+                          className="px-2 py-0.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[10.5px] font-bold cursor-pointer"
+                        >
+                          همین بخش ({filteredTemplates.length})
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onDeleteAllTemplates('all');
+                          setConfirmDeleteAll(false);
+                        }}
+                        className="px-2 py-0.5 rounded-lg bg-rose-800 hover:bg-rose-950 text-white text-[10.5px] font-bold cursor-pointer"
+                      >
+                        کل قالب‌ها ({templates.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteAll(false)}
+                        className="px-1.5 py-0.5 text-[10.5px] font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
+                      >
+                        لغو
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {onResetDefaultTemplates && templates.length === 0 && (
+                <button
+                  type="button"
+                  onClick={onResetDefaultTemplates}
+                  className="h-8 inline-flex items-center gap-1 text-xs font-bold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 px-2.5 rounded-lg transition-colors cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>بازنشانی قالب‌های پیش‌فرض</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowInlineSaveBox((prev) => !prev);
+                  if (!inlineTitle) setInlineTitle(defaultSuggestedTitle);
+                }}
+                className="h-8 inline-flex items-center gap-1.5 text-xs font-bold text-white bg-teal-600 hover:bg-teal-700 px-3 rounded-lg shadow-2xs transition-all duration-200 cursor-pointer"
+              >
+                <BookmarkPlus className="w-3.5 h-3.5" />
+                <span>{showInlineSaveBox ? 'بستن کادر ذخیره قالب' : '+ ذخیره متن فعلی به عنوان قالب'}</span>
+              </button>
+            </div>
           </div>
 
           {showInlineSaveBox && (
@@ -343,13 +439,26 @@ export const TemplateDrawer: React.FC<TemplateDrawerProps> = ({
         {/* Templates List */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {filteredTemplates.length === 0 ? (
-            <div className="text-center py-12 text-slate-400">
+            <div className="text-center py-12 text-slate-400 space-y-3">
               <Layers className="w-10 h-10 mx-auto mb-2 opacity-40" />
-              <p className="text-xs">قالبی با مشخصات فیلتر شده یافت نشد.</p>
+              <p className="text-xs font-semibold text-slate-500">
+                قالبی در این بخش وجود ندارد.
+              </p>
+              {onResetDefaultTemplates && templates.length === 0 && (
+                <button
+                  type="button"
+                  onClick={onResetDefaultTemplates}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-colors cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>بازگردانی قالب‌های آماده پیش‌فرض</span>
+                </button>
+              )}
             </div>
           ) : (
             filteredTemplates.map((template) => {
               const doc = doctors.find((d) => d.id === template.doctorId);
+              const isEditingThis = editingTemplateId === template.id;
               const modalityFa =
                 template.modality === 'mri'
                   ? 'ام‌آر‌آی'
@@ -381,48 +490,103 @@ export const TemplateDrawer: React.FC<TemplateDrawerProps> = ({
                   key={template.id}
                   className={`bg-white rounded-2xl border transition-all duration-200 p-4 space-y-2.5 hover:shadow-md ${modCardTheme.border}`}
                 >
-                  {/* Title and Badges */}
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <div className="flex items-center gap-1.5">
-                        <h4 className="text-xs sm:text-sm font-bold text-slate-900">
-                          {template.title}
-                        </h4>
-                      </div>
-                      <div className="flex items-center gap-2 mt-1 flex-wrap">
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${modCardTheme.badge}`}>
-                          {modalityFa}
-                        </span>
-
-                        <span className="text-[10px] text-slate-500 flex items-center gap-1">
-                          <User className="w-3 h-3 text-slate-400" />
-                          <span>{doc ? doc.name : 'قالب عمومی تمام پزشکان'}</span>
-                        </span>
-
-                        {typeof template.usageCount === 'number' && template.usageCount > 0 && (
-                          <span
-                            className="text-[10px] font-mono font-bold text-teal-700 bg-teal-50 border border-teal-200 px-1.5 py-0.2 rounded-md"
-                            title="تعداد دفعات استفاده از این قالب"
+                  {/* Title and Badges or Inline Edit Form */}
+                  {isEditingThis ? (
+                    <div className="p-3 rounded-xl bg-slate-50 border border-teal-300 space-y-2.5 animate-fadeIn">
+                      <div className="text-[11px] font-bold text-teal-900">ویرایش عنوان و پزشک قالب:</div>
+                      <input
+                        type="text"
+                        autoFocus
+                        value={editTitle}
+                        onChange={(e) => setEditTitle(e.target.value)}
+                        className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white font-bold focus:border-teal-500 focus:outline-none"
+                      />
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <select
+                          value={editDoctorId}
+                          onChange={(e) => setEditDoctorId(e.target.value)}
+                          className="text-xs p-1.5 rounded-lg border border-slate-200 bg-white font-semibold"
+                        >
+                          <option value="all">قالب عمومی تمام پزشکان</option>
+                          {doctors.map((d) => (
+                            <option key={d.id} value={d.id}>
+                              اختصاصی {d.name}
+                            </option>
+                          ))}
+                        </select>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setEditingTemplateId(null)}
+                            className="px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-200 rounded-lg cursor-pointer"
                           >
-                            {template.usageCount} بار استفاده
-                          </span>
-                        )}
+                            انصراف
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSaveEditTemplate(template.id)}
+                            className="px-3 py-1 text-xs font-bold bg-teal-600 hover:bg-teal-700 text-white rounded-lg cursor-pointer inline-flex items-center gap-1"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            <span>ذخیره</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
+                  ) : (
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <h4 className="text-xs sm:text-sm font-bold text-slate-900">
+                            {template.title}
+                          </h4>
+                        </div>
+                        <div className="flex items-center gap-2 mt-1 flex-wrap">
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${modCardTheme.badge}`}>
+                            {modalityFa}
+                          </span>
 
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      {/* Clone button */}
-                      <button
-                        type="button"
-                        onClick={() => onCloneTemplate(template)}
-                        className="h-7 text-xs font-semibold text-slate-600 hover:text-teal-700 bg-slate-100 hover:bg-teal-50 px-2.5 rounded-lg border border-slate-200 hover:border-teal-300 inline-flex items-center gap-1 transition-all duration-150 cursor-pointer"
-                        title="کپی کردن این قالب برای پزشک دیگر"
-                      >
-                        <Copy className="w-3 h-3" />
-                        <span>کپی</span>
-                      </button>
+                          <span className="text-[10px] text-slate-500 flex items-center gap-1">
+                            <User className="w-3 h-3 text-slate-400" />
+                            <span>{doc ? doc.name : 'قالب عمومی تمام پزشکان'}</span>
+                          </span>
+
+                          {typeof template.usageCount === 'number' && template.usageCount > 0 && (
+                            <span
+                              className="text-[10px] font-mono font-bold text-teal-700 bg-teal-50 border border-teal-200 px-1.5 py-0.2 rounded-md"
+                              title="تعداد دفعات استفاده از این قالب"
+                            >
+                              {template.usageCount} بار استفاده
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {onUpdateTemplate && (
+                          <button
+                            type="button"
+                            onClick={() => handleStartEditTemplate(template)}
+                            className="h-7 text-xs font-semibold text-slate-600 hover:text-indigo-700 bg-slate-100 hover:bg-indigo-50 px-2 rounded-lg border border-slate-200 hover:border-indigo-300 inline-flex items-center gap-1 transition-all duration-150 cursor-pointer"
+                            title="ویرایش عنوان و پزشک این قالب"
+                          >
+                            <Pencil className="w-3 h-3" />
+                            <span>ویرایش</span>
+                          </button>
+                        )}
+                        {/* Clone button */}
+                        <button
+                          type="button"
+                          onClick={() => onCloneTemplate(template)}
+                          className="h-7 text-xs font-semibold text-slate-600 hover:text-teal-700 bg-slate-100 hover:bg-teal-50 px-2.5 rounded-lg border border-slate-200 hover:border-teal-300 inline-flex items-center gap-1 transition-all duration-150 cursor-pointer"
+                          title="کپی کردن این قالب برای پزشک دیگر"
+                        >
+                          <Copy className="w-3 h-3" />
+                          <span>کپی</span>
+                        </button>
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   {/* Summary Preview */}
                   <div className="text-[11px] text-slate-600 bg-slate-50/70 p-2.5 rounded-xl border border-slate-100 line-clamp-2 leading-relaxed">
@@ -491,10 +655,11 @@ export const TemplateDrawer: React.FC<TemplateDrawerProps> = ({
                     <button
                       type="button"
                       onClick={() => onDeleteTemplate(template.id)}
-                      className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
-                      title="حذف قالب"
+                      className="h-7 px-2 text-rose-600 hover:text-white bg-rose-50 hover:bg-rose-600 border border-rose-200 hover:border-rose-600 rounded-lg transition-colors cursor-pointer inline-flex items-center gap-1 text-[11px] font-bold"
+                      title="حذف دائمی این قالب"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
+                      <span>حذف</span>
                     </button>
                   </div>
                 </div>
