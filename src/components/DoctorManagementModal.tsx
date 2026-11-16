@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { Doctor } from '../types';
-import { User, X, Plus, Trash2, PenTool, Upload, Check, Pencil } from 'lucide-react';
+import { Doctor, CustomFont } from '../types';
+import { User, X, Plus, Trash2, PenTool, Upload, Check, Pencil, Type } from 'lucide-react';
 
-// Built-in vector sample Doctor Digital Signatures (100% offline SVG Data URIs)
+// Built-in vector sample Doctor Digital Signatures (100% offline SVG Data URIs - pure vector paths so canvas/PNG export never scrambles text)
 const SAMPLE_DOCTOR_SIGNATURES: { id: string; label: string; url: string }[] = [
   {
     id: 'sig-blue-classic',
@@ -22,8 +22,8 @@ const SAMPLE_DOCTOR_SIGNATURES: { id: string; label: string; url: string }[] = [
     url: `data:image/svg+xml;utf8,${encodeURIComponent(
       `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 90" width="260" height="90">
         <circle cx="62" cy="45" r="34" fill="none" stroke="#0f766e" stroke-width="2.2" stroke-dasharray="5 3" opacity="0.75"/>
-        <circle cx="62" cy="45" r="28" fill="none" stroke="#0f766e" stroke-width="1.2" opacity="0.6"/>
-        <text x="62" y="48" font-family="Tahoma, sans-serif" font-size="10" font-weight="bold" fill="#0f766e" text-anchor="middle" opacity="0.85">RADIOLOGY</text>
+        <circle cx="62" cy="45" r="27" fill="none" stroke="#0f766e" stroke-width="1.3" opacity="0.55"/>
+        <path d="M62 24 L65 37 L78 37 L67 45 L71 58 L62 50 L53 58 L57 45 L46 37 L59 37 Z" fill="none" stroke="#0f766e" stroke-width="1.4" opacity="0.55"/>
         <path d="M44 62 C78 16, 114 24, 108 58 C104 76, 138 24, 158 52 C172 70, 195 28, 232 34" fill="none" stroke="#0f172a" stroke-width="3" stroke-linecap="round"/>
         <path d="M40 70 Q145 58 238 62" fill="none" stroke="#0f766e" stroke-width="2.2" stroke-linecap="round"/>
       </svg>`
@@ -40,6 +40,18 @@ const SAMPLE_DOCTOR_SIGNATURES: { id: string; label: string; url: string }[] = [
   },
 ];
 
+const STAMP_FONT_OPTIONS: { label: string; value: string }[] = [
+  { label: 'وزیرمتن استاندارد (Vazirmatn)', value: "'Vazirmatn', sans-serif" },
+  { label: 'لاله‌زار بولد و رسمی (Lalezar)', value: "'Lalezar', 'Vazirmatn', sans-serif" },
+  { label: 'امیری کلاسیک پزشکی (Amiri)', value: "'Amiri', 'Vazirmatn', serif" },
+  { label: 'نسخ رسمی (Noto Naskh Arabic)', value: "'Noto Naskh Arabic', 'Vazirmatn', serif" },
+  { label: 'مرکزی رسمی (Markazi Text)', value: "'Markazi Text', 'Vazirmatn', serif" },
+  { label: 'ریدکس مدرن (Readex Pro)', value: "'Readex Pro', 'Vazirmatn', sans-serif" },
+  { label: 'بی تیتر (B Titr + وب‌فونت جایگزین)', value: "'B Titr', 'Lalezar', 'Vazirmatn', sans-serif" },
+  { label: 'بی نازنین (B Nazanin + وب‌فونت جایگزین)', value: "'B Nazanin', 'Amiri', 'Noto Naskh Arabic', 'Vazirmatn', serif" },
+  { label: 'ایران نستعلیق (IranNastaliq + امیری)', value: "'IranNastaliq', 'Amiri', 'Vazirmatn', serif" },
+];
+
 interface DoctorManagementModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -51,6 +63,7 @@ interface DoctorManagementModalProps {
   onDeleteDoctor: (id: string) => void;
   defaultSignatureUrl?: string;
   onUpdateDefaultSignatureUrl?: (url: string) => void;
+  customFonts?: CustomFont[];
 }
 
 export const DoctorManagementModal: React.FC<DoctorManagementModalProps> = ({
@@ -62,18 +75,31 @@ export const DoctorManagementModal: React.FC<DoctorManagementModalProps> = ({
   onAddDoctor,
   onUpdateDoctor,
   onDeleteDoctor,
+  customFonts = [],
 }) => {
   const [showAddForm, setShowAddForm] = useState(false);
   const [name, setName] = useState('');
   const [medicalCouncilId, setMedicalCouncilId] = useState('');
   const [specialty, setSpecialty] = useState('');
   const [stampText, setStampText] = useState('');
+  const [stampFont, setStampFont] = useState("'Vazirmatn', sans-serif");
+  const [stampFontSize, setStampFontSize] = useState<number>(13);
   const [newSignatureUrl, setNewSignatureUrl] = useState('');
   const [expandedDocId, setExpandedDocId] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
   const currentExpandedId = expandedDocId ?? activeDoctorId;
+
+  const allFontOptions = [
+    ...STAMP_FONT_OPTIONS,
+    ...customFonts
+      .filter((cf) => !STAMP_FONT_OPTIONS.some((o) => o.value.includes(cf.family)))
+      .map((cf) => ({
+        label: `${cf.name} (سفارشی)`,
+        value: `'${cf.family}', 'Vazirmatn', sans-serif`,
+      })),
+  ];
 
   const handleImageUpload = (
     e: React.ChangeEvent<HTMLInputElement>,
@@ -102,6 +128,8 @@ export const DoctorManagementModal: React.FC<DoctorManagementModalProps> = ({
       specialty: specialty.trim() || 'متخصص رادیولوژی و سونوگرافی',
       stampText:
         stampText.trim() || `${name.trim()} - متخصص رادیولوژی - ن.پ ${medicalCouncilId.trim()}`,
+      stampFont: stampFont || "'Vazirmatn', sans-serif",
+      stampFontSize: stampFontSize || 13,
       signatureUrl: newSignatureUrl || undefined,
     });
 
@@ -109,6 +137,8 @@ export const DoctorManagementModal: React.FC<DoctorManagementModalProps> = ({
     setMedicalCouncilId('');
     setSpecialty('');
     setStampText('');
+    setStampFont("'Vazirmatn', sans-serif");
+    setStampFontSize(13);
     setNewSignatureUrl('');
     setShowAddForm(false);
   };
@@ -124,10 +154,10 @@ export const DoctorManagementModal: React.FC<DoctorManagementModalProps> = ({
             </div>
             <div className="min-w-0">
               <h3 className="font-bold text-sm sm:text-base">
-                مدیریت و ویرایش پزشکان متخصص، مهر و امضای دیجیتال
+                مدیریت و ویرایش پزشکان متخصص، فونت نام، مهر و امضای دیجیتال
               </h3>
               <p className="text-[11px] text-teal-100 mt-0.5">
-                افزودن یا ویرایش نام پزشک، شماره نظام پزشکی، تخصص، متن مهر و امضای دیجیتال پای برگه A4
+                افزودن یا ویرایش نام پزشک، فونت اختصاصی نام و مهر، شماره نظام پزشکی، تخصص و امضای دیجیتال پای برگه A4
               </p>
             </div>
           </div>
@@ -145,7 +175,7 @@ export const DoctorManagementModal: React.FC<DoctorManagementModalProps> = ({
         <div className="p-5 sm:p-6 overflow-y-auto space-y-4 flex-1">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <span className="text-xs font-bold text-slate-600">
-              برای ویرایش نام، تخصص، نظام پزشکی یا مهر هر پزشک روی دکمه «ویرایش اطلاعات و مهر» کلیک کنید:
+              برای ویرایش نام، فونت مهر و امضا، تخصص یا نظام پزشکی هر پزشک روی دکمه «ویرایش اطلاعات و مهر» کلیک کنید:
             </span>
             <button
               type="button"
@@ -163,7 +193,7 @@ export const DoctorManagementModal: React.FC<DoctorManagementModalProps> = ({
               onSubmit={handleAdd}
               className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3 animate-fadeIn"
             >
-              <div className="text-xs font-bold text-slate-800">مشخصات، مهر و امضای پزشک جدید</div>
+              <div className="text-xs font-bold text-slate-800">مشخصات، فونت مهر و امضای پزشک جدید</div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[11px] font-medium text-slate-600 mb-1">
@@ -194,30 +224,70 @@ export const DoctorManagementModal: React.FC<DoctorManagementModalProps> = ({
                 </div>
               </div>
 
-              <div>
-                <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                  تخصص یا فلوشیپ (چاپ زیر نام پزشک در مهر):
-                </label>
-                <input
-                  type="text"
-                  value={specialty}
-                  onChange={(e) => setSpecialty(e.target.value)}
-                  placeholder="متخصص رادیولوژی و سونوگرافی، فلوشیپ ام‌آر‌آی"
-                  className="w-full text-xs p-2 rounded-lg border border-slate-200 bg-white"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                    تخصص یا فلوشیپ (چاپ زیر نام پزشک در مهر):
+                  </label>
+                  <input
+                    type="text"
+                    value={specialty}
+                    onChange={(e) => setSpecialty(e.target.value)}
+                    placeholder="متخصص رادیولوژی و سونوگرافی، فلوشیپ ام‌آر‌آی"
+                    className="w-full text-xs p-2 rounded-lg border border-slate-200 bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                    متن مهر دیجیتال انتهای گزارش:
+                  </label>
+                  <input
+                    type="text"
+                    value={stampText}
+                    onChange={(e) => setStampText(e.target.value)}
+                    placeholder="دکتر ... - متخصص رادیولوژی و سونوگرافی - ن.پ ..."
+                    className="w-full text-xs p-2 rounded-lg border border-slate-200 bg-white"
+                  />
+                </div>
               </div>
 
-              <div>
-                <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                  متن مهر دیجیتال انتهای گزارش:
-                </label>
-                <input
-                  type="text"
-                  value={stampText}
-                  onChange={(e) => setStampText(e.target.value)}
-                  placeholder="دکتر ... - متخصص رادیولوژی و سونوگرافی - ن.پ ..."
-                  className="w-full text-xs p-2 rounded-lg border border-slate-200 bg-white"
-                />
+              {/* Font Family & Size for New Doctor Stamp */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 bg-white rounded-xl border border-slate-200">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1 flex items-center gap-1">
+                    <Type className="w-3.5 h-3.5 text-teal-600" />
+                    <span>فونت نام پزشک و مهر در برگه چاپ:</span>
+                  </label>
+                  <select
+                    value={stampFont}
+                    onChange={(e) => setStampFont(e.target.value)}
+                    className="w-full text-xs p-2 rounded-lg border border-slate-200 bg-slate-50 font-bold"
+                  >
+                    {allFontOptions.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                    سایز عنوان نام پزشک در مهر (پیکسل):
+                  </label>
+                  <select
+                    value={stampFontSize}
+                    onChange={(e) => setStampFontSize(Number(e.target.value))}
+                    className="w-full text-xs p-2 rounded-lg border border-slate-200 bg-slate-50 font-mono font-bold"
+                  >
+                    <option value={11}>۱۱ پیکسل (ظریف)</option>
+                    <option value={12}>۱۲ پیکسل (متوسط)</option>
+                    <option value={13}>۱۳ پیکسل (استاندارد)</option>
+                    <option value={14}>۱۴ پیکسل (درشت)</option>
+                    <option value={15}>۱۵ پیکسل (بسیار درشت)</option>
+                    <option value={16}>۱۶ پیکسل (بولد ویژه)</option>
+                    <option value={18}>۱۸ پیکسل (فوق درشت)</option>
+                  </select>
+                </div>
               </div>
 
               {/* Signature Upload / Sample Selection for New Doctor */}
@@ -307,6 +377,8 @@ export const DoctorManagementModal: React.FC<DoctorManagementModalProps> = ({
               const isCurrent = doc.id === activeDoctorId;
               const isExpanded = currentExpandedId === doc.id;
               const effectiveSignatureUrl = doc.signatureUrl || '';
+              const docStampFont = doc.stampFont || "'Vazirmatn', sans-serif";
+              const docStampFontSize = doc.stampFontSize || 13;
 
               const updateDocSignature = (url: string) => {
                 onUpdateDoctor?.(doc.id, { signatureUrl: url });
@@ -329,7 +401,10 @@ export const DoctorManagementModal: React.FC<DoctorManagementModalProps> = ({
                       </div>
                       <div>
                         <div className="flex items-center gap-2 flex-wrap">
-                          <h4 className="text-xs sm:text-sm font-bold text-slate-900">
+                          <h4
+                            className="text-xs sm:text-sm font-bold text-slate-900"
+                            style={{ fontFamily: docStampFont }}
+                          >
                             {doc.name}
                           </h4>
                           {isCurrent && (
@@ -398,13 +473,13 @@ export const DoctorManagementModal: React.FC<DoctorManagementModalProps> = ({
                     </div>
                   </div>
 
-                  {/* Expandable Full Doctor Info, Stamp & Digital Signature Editor */}
+                  {/* Expandable Full Doctor Info, Stamp Font & Digital Signature Editor */}
                   {isExpanded && (
                     <div className="px-4 pb-4 pt-3.5 border-t border-slate-200/80 bg-white/95 space-y-3.5 animate-fadeIn">
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-black text-indigo-950 flex items-center gap-1.5">
                           <Pencil className="w-3.5 h-3.5 text-indigo-600" />
-                          <span>ویرایش مشخصات کامل پزشک و مهر چاپی:</span>
+                          <span>ویرایش مشخصات کامل پزشک، فونت نام و مهر چاپی:</span>
                         </span>
                         <span className="text-[10.5px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-lg">
                           ✓ تغییرات به صورت آنی ذخیره می‌شوند
@@ -474,6 +549,52 @@ export const DoctorManagementModal: React.FC<DoctorManagementModalProps> = ({
                             placeholder={`${doc.name} - ${doc.specialty} - ن.پ ${doc.medicalCouncilId}`}
                             className="w-full text-xs p-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-teal-500 focus:outline-none"
                           />
+                        </div>
+                      </div>
+
+                      {/* Doctor Name & Stamp Font Family + Font Size Selector */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 rounded-2xl bg-teal-50/40 border border-teal-200/80">
+                        <div>
+                          <label className="block text-[11px] font-bold text-teal-950 mb-1 flex items-center gap-1.5">
+                            <Type className="w-3.5 h-3.5 text-teal-700" />
+                            <span>فونت نام پزشک و مهر چاپی:</span>
+                          </label>
+                          <select
+                            value={docStampFont}
+                            onChange={(e) =>
+                              onUpdateDoctor?.(doc.id, { stampFont: e.target.value })
+                            }
+                            className="w-full text-xs p-2 rounded-xl border border-teal-300 bg-white focus:border-teal-600 focus:outline-none font-bold text-slate-800 cursor-pointer"
+                          >
+                            {allFontOptions.map((opt) => (
+                              <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-bold text-teal-950 mb-1">
+                            سایز فونت نام پزشک در مهر چاپی:
+                          </label>
+                          <select
+                            value={docStampFontSize}
+                            onChange={(e) =>
+                              onUpdateDoctor?.(doc.id, {
+                                stampFontSize: Number(e.target.value),
+                              })
+                            }
+                            className="w-full text-xs p-2 rounded-xl border border-teal-300 bg-white focus:border-teal-600 focus:outline-none font-mono font-bold text-slate-800 cursor-pointer"
+                          >
+                            <option value={11}>۱۱ پیکسل (ظریف)</option>
+                            <option value={12}>۱۲ پیکسل (متوسط)</option>
+                            <option value={13}>۱۳ پیکسل (استاندارد)</option>
+                            <option value={14}>۱۴ پیکسل (درشت)</option>
+                            <option value={15}>۱۵ پیکسل (بسیار درشت)</option>
+                            <option value={16}>۱۶ پیکسل (بولد ویژه)</option>
+                            <option value={18}>۱۸ پیکسل (فوق درشت)</option>
+                          </select>
                         </div>
                       </div>
 
@@ -550,9 +671,26 @@ export const DoctorManagementModal: React.FC<DoctorManagementModalProps> = ({
                           <div className="text-[10px] font-bold text-slate-500 mb-1 text-center">
                             پیش‌نمایش زنده کادر مهر و امضا در برگه چاپ:
                           </div>
-                          <div className="text-center p-3 rounded-xl border-2 border-dashed border-teal-700/60 bg-teal-50/20 flex-1 flex flex-col justify-center">
-                            <div className="text-xs font-black text-teal-900">{doc.name}</div>
-                            <div className="text-[10.5px] font-medium text-slate-700 mt-0.5">
+                          <div
+                            className="text-center p-3 rounded-xl border-2 border-dashed border-teal-700/60 bg-teal-50/20 flex-1 flex flex-col justify-center"
+                            style={{ fontFamily: docStampFont }}
+                          >
+                            <div
+                              className="font-black text-teal-900"
+                              style={{
+                                fontFamily: docStampFont,
+                                fontSize: `${docStampFontSize}px`,
+                              }}
+                            >
+                              {doc.name}
+                            </div>
+                            <div
+                              className="font-medium text-slate-700 mt-0.5"
+                              style={{
+                                fontFamily: docStampFont,
+                                fontSize: `${Math.max(10, docStampFontSize - 2)}px`,
+                              }}
+                            >
                               {doc.specialty}
                             </div>
                             <div className="text-[10px] font-mono text-slate-500 mt-0.5">

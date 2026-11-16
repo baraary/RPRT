@@ -90,6 +90,7 @@ interface RichMedicalEditorProps {
   onRestoreReportRevision?: (revision: ReportRevision) => void;
   editorLineHeight?: number;
   printLineHeight?: number;
+  onActiveStudyChange?: (studyId: string) => void;
 }
 
 interface UnifiedOrganGroup {
@@ -134,6 +135,7 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
   onRestoreReportRevision,
   editorLineHeight = 1.9,
   printLineHeight = 1.75,
+  onActiveStudyChange,
 }) => {
   const [activeStudyId, setActiveStudyId] = useState<string>(studies[0]?.id || '');
   const [activeSuggestions, setActiveSuggestions] = useState<string[]>([]);
@@ -339,13 +341,69 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
     }
   }, [studies, activeStudyId]);
 
-  // Register active editor ref for toolbar execCommands
+  // Register active editor ref for toolbar execCommands and notify parent of active study
   useEffect(() => {
     const el = findingsRefs.current[activeStudyId] || null;
     if (onRegisterActiveEditorRef) {
       onRegisterActiveEditorRef(el);
     }
-  }, [activeStudyId, onRegisterActiveEditorRef]);
+    if (onActiveStudyChange && activeStudyId) {
+      onActiveStudyChange(activeStudyId);
+    }
+  }, [activeStudyId, onRegisterActiveEditorRef, onActiveStudyChange]);
+
+  // Force Plain Text on Paste inside contentEditable elements (strips external fonts, colors, background styles, tables/HTML)
+  const handlePasteAsPlainText = useCallback(
+    (
+      e: React.ClipboardEvent<HTMLDivElement>,
+      onAfterPaste: (cleanHtml: string) => void
+    ) => {
+      e.preventDefault();
+      const plainText = e.clipboardData.getData('text/plain');
+      if (!plainText) return;
+
+      const el = e.currentTarget;
+      el.focus();
+
+      let insertedWithCommand = false;
+      try {
+        insertedWithCommand = document.execCommand('insertText', false, plainText);
+      } catch {
+        insertedWithCommand = false;
+      }
+
+      if (!insertedWithCommand) {
+        const selection = window.getSelection();
+        if (selection && selection.rangeCount > 0) {
+          const range = selection.getRangeAt(0);
+          range.deleteContents();
+          const lines = plainText.split(/\r?\n/);
+          const frag = document.createDocumentFragment();
+          lines.forEach((line, idx) => {
+            if (idx > 0) {
+              frag.appendChild(document.createElement('br'));
+            }
+            if (line) {
+              frag.appendChild(document.createTextNode(line));
+            }
+          });
+          const lastChild = frag.lastChild;
+          range.insertNode(frag);
+          if (lastChild) {
+            range.setStartAfter(lastChild);
+            range.collapse(true);
+            selection.removeAllRanges();
+            selection.addRange(range);
+          }
+        } else {
+          el.innerText += plainText;
+        }
+      }
+
+      onAfterPaste(el.innerHTML);
+    },
+    []
+  );
 
   // Sync findings content safely without losing caret
   useEffect(() => {
@@ -2142,6 +2200,9 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
               return org.modalities.includes(study.modality);
             });
 
+            const studyDir: 'rtl' | 'ltr' =
+              study.direction || (study.modality === 'sonography' ? 'rtl' : 'ltr');
+
             return (
               <React.Fragment key={study.id}>
                 {/* Item 3 (Part A): Live Inter-Study A4 Page-Break Divider when this study starts on Page 2 */}
@@ -2189,26 +2250,51 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                         </span>
                       </label>
 
-                      {/* Delete study button (only if more than 1 study exists) */}
-                      {studies.length > 1 && (
+                      <div className="flex items-center gap-1.5">
+                        {/* Per-Study Independent RTL / LTR Toggle Pill */}
                         <button
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            onRemoveStudy(study.id);
+                            if (isReportLocked) return;
+                            const nextDir: 'rtl' | 'ltr' = studyDir === 'rtl' ? 'ltr' : 'rtl';
+                            onUpdateStudy(study.id, { direction: nextDir });
+                            if (onShowToast) {
+                              onShowToast(
+                                `جهت نگارش بررسی شماره ${index + 1} به ${
+                                  nextDir === 'ltr' ? 'انگلیسی (چپ‌به‌راست LTR)' : 'فارسی (راست‌به‌چپ RTL)'
+                                } تغییر یافت.`
+                              );
+                            }
                           }}
-                          className="h-6 w-6 flex items-center justify-center text-slate-300 hover:text-rose-400 rounded-lg hover:bg-slate-800/80 transition-colors cursor-pointer shrink-0"
-                          title="حذف این تصویربرداری"
+                          className="h-6 px-2 rounded-lg bg-white/15 hover:bg-white/25 text-white border border-white/25 text-[10px] font-bold font-mono flex items-center gap-1 transition-colors cursor-pointer"
+                          title="تغییر مستقل جهت نوشتار (RTL / LTR) برای این تصویربرداری"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>{studyDir === 'ltr' ? 'EN • LTR' : 'FA • RTL'}</span>
                         </button>
-                      )}
+
+                        {/* Delete study button (only if more than 1 study exists) */}
+                        {studies.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onRemoveStudy(study.id);
+                            }}
+                            className="h-6 w-6 flex items-center justify-center text-slate-300 hover:text-rose-400 rounded-lg hover:bg-slate-800/80 transition-colors cursor-pointer shrink-0"
+                            title="حذف این تصویربرداری"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     <textarea
                       ref={(el) => {
                         titleRefs.current[study.id] = el;
                       }}
+                      dir={studyDir}
                       readOnly={isReportLocked}
                       value={study.titleAndTechnique}
                       onChange={(e) => {
@@ -2219,7 +2305,11 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                         if (isReportLocked) return;
                         handleTitleKeyDown(e, study);
                       }}
-                      placeholder="عنوان دقیق تصویربرداری، پروتکل، سکانس‌ها و شرایط انجام را اینجا بنویسید..."
+                      placeholder={
+                        studyDir === 'ltr'
+                          ? 'Enter study title, imaging protocol & technique (e.g., Brain MRI without contrast)...'
+                          : 'عنوان دقیق تصویربرداری، پروتکل، سکانس‌ها و شرایط انجام را اینجا بنویسید...'
+                      }
                       rows={
                         (study.titleAndTechnique || '').length > 90 ||
                         (study.titleAndTechnique || '').includes('\n')
@@ -2229,10 +2319,12 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                       style={{
                         fontFamily: headingFont,
                         fontSize: `${Math.round((((parseInt(headingFontSize, 10) || 16) + 3) * editorZoom) / 100)}px`,
+                        direction: studyDir,
+                        textAlign: studyDir === 'ltr' ? 'left' : 'right',
                       }}
                       className={`study-header-protocol-input w-full font-bold px-3 py-1.5 rounded-xl border leading-relaxed resize-y focus:outline-none focus:ring-1 focus:ring-teal-400 placeholder:text-slate-400 transition-colors ${
-                        isReportLocked ? 'opacity-80 cursor-not-allowed' : ''
-                      }`}
+                        studyDir === 'ltr' ? 'text-left' : 'text-right'
+                      } ${isReportLocked ? 'opacity-80 cursor-not-allowed' : ''}`}
                     />
                   </div>
 
@@ -2588,9 +2680,15 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                           findingsRefs.current[study.id] = el;
                         }}
                         contentEditable={!isReportLocked}
-                        dir={activeDirection}
+                        dir={studyDir}
                         onClick={(e) => handleEditorClick(e, study.id)}
                         onFocus={() => setActiveStudyId(study.id)}
+                        onPaste={(e) => {
+                          if (isReportLocked) return;
+                          handlePasteAsPlainText(e, () => {
+                            handleFindingsInput(study);
+                          });
+                        }}
                         onInput={() => {
                           if (isReportLocked) return;
                           handleFindingsInput(study);
@@ -2606,10 +2704,14 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                           fontFamily: `${defaultFont}, 'Vazirmatn', sans-serif`,
                           fontSize: `${Math.round((((defaultFontSize || 14) + 6) * editorZoom) / 100)}px`,
                           lineHeight: editorLineHeight || 1.9,
-                          direction: activeDirection,
-                          textAlign: activeDirection === 'rtl' ? 'right' : 'left',
+                          direction: studyDir,
+                          textAlign: studyDir === 'rtl' ? 'right' : 'left',
                         }}
-                        data-placeholder="یافته‌های این تصویربرداری را اینجا تایپ کنید..."
+                        data-placeholder={
+                          studyDir === 'ltr'
+                            ? 'Type imaging findings here...'
+                            : 'یافته‌های این تصویربرداری را اینجا تایپ کنید...'
+                        }
                       />
                     </div>
 
@@ -2792,11 +2894,18 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                           <div className="mt-2 animate-fadeIn">
                             <input
                               type="text"
+                              dir={studyDir}
                               value={study.comparison}
                               onChange={(e) => onUpdateStudy(study.id, { comparison: e.target.value })}
-                              placeholder="شرح بررسی پیشین و مقایسه تغییرات..."
+                              placeholder={
+                                studyDir === 'ltr'
+                                  ? 'Comparison with prior study...'
+                                  : 'شرح بررسی پیشین و مقایسه تغییرات...'
+                              }
                               style={{
                                 fontSize: `${Math.round((((defaultFontSize || 14) + 4) * editorZoom) / 100)}px`,
+                                direction: studyDir,
+                                textAlign: studyDir === 'rtl' ? 'right' : 'left',
                               }}
                               className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:border-teal-500 bg-white high-visibility-editor"
                             />
@@ -2844,8 +2953,13 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                           <div className="mt-2 animate-fadeIn">
                             <div
                               contentEditable
-                              dir={activeDirection}
+                              dir={studyDir}
                               dangerouslySetInnerHTML={{ __html: study.impressionHtml }}
+                              onPaste={(e) =>
+                                handlePasteAsPlainText(e, (cleanHtml) =>
+                                  onUpdateStudy(study.id, { impressionHtml: cleanHtml })
+                                )
+                              }
                               onInput={(e) => onUpdateStudy(study.id, { impressionHtml: e.currentTarget.innerHTML })}
                               onKeyDown={(e) => {
                                 if (e.key === ' ' || e.key === 'Tab') {
@@ -2861,8 +2975,8 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                                 fontFamily: `${defaultFont}, 'Vazirmatn', sans-serif`,
                                 fontSize: `${Math.round((((defaultFontSize || 14) + 5) * editorZoom) / 100)}px`,
                                 lineHeight: editorLineHeight || 1.9,
-                                direction: activeDirection,
-                                textAlign: activeDirection === 'rtl' ? 'right' : 'left',
+                                direction: studyDir,
+                                textAlign: studyDir === 'rtl' ? 'right' : 'left',
                               }}
                             />
                           </div>
@@ -2894,8 +3008,13 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                           <div className="mt-2 animate-fadeIn">
                             <div
                               contentEditable
-                              dir={activeDirection}
+                              dir={studyDir}
                               dangerouslySetInnerHTML={{ __html: study.recommendationsHtml }}
+                              onPaste={(e) =>
+                                handlePasteAsPlainText(e, (cleanHtml) =>
+                                  onUpdateStudy(study.id, { recommendationsHtml: cleanHtml })
+                                )
+                              }
                               onInput={(e) => onUpdateStudy(study.id, { recommendationsHtml: e.currentTarget.innerHTML })}
                               onKeyDown={(e) => {
                                 if (e.key === ' ' || e.key === 'Tab') {
@@ -2911,8 +3030,8 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                                 fontFamily: `${defaultFont}, 'Vazirmatn', sans-serif`,
                                 fontSize: `${Math.round((((defaultFontSize || 14) + 4.5) * editorZoom) / 100)}px`,
                                 lineHeight: editorLineHeight || 1.9,
-                                direction: activeDirection,
-                                textAlign: activeDirection === 'rtl' ? 'right' : 'left',
+                                direction: studyDir,
+                                textAlign: studyDir === 'rtl' ? 'right' : 'left',
                               }}
                             />
                           </div>

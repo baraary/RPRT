@@ -32,7 +32,16 @@ import { SettingsModal } from './components/SettingsModal';
 import { FontManagerModal } from './components/FontManagerModal';
 import { CommandPaletteModal } from './components/CommandPaletteModal';
 import { ShiftLaunchpad } from './components/ShiftLaunchpad';
-import { PlusCircle, X, Check, Printer, Search, Trash2 } from 'lucide-react';
+import {
+  PlusCircle,
+  X,
+  Check,
+  Printer,
+  Search,
+  Trash2,
+  Image as ImageIcon,
+  FileDown,
+} from 'lucide-react';
 import {
   stripSpellHighlights,
   createSlotHtml,
@@ -44,10 +53,26 @@ import {
   incrementAdmissionNumber,
 } from './services/typistUtils';
 
-function createDefaultStudy(_slotsEnabled: boolean, mod: Modality = 'sonography'): ReportStudy {
+function getDefaultModalityDirection(
+  mod: Modality,
+  customMap?: Record<Modality, 'rtl' | 'ltr'>
+): 'rtl' | 'ltr' {
+  if (customMap && customMap[mod]) {
+    return customMap[mod];
+  }
+  return mod === 'sonography' ? 'rtl' : 'ltr';
+}
+
+function createDefaultStudy(
+  _slotsEnabled: boolean,
+  mod: Modality = 'sonography',
+  dir?: 'rtl' | 'ltr'
+): ReportStudy {
+  const resolvedDir = dir || (mod === 'sonography' ? 'rtl' : 'ltr');
   return {
     id: `study-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
     modality: mod,
+    direction: resolvedDir,
     titleAndTechnique: '',
     findingsHtml: '<p><br></p>',
     showComparison: false,
@@ -139,7 +164,10 @@ export default function App() {
   });
 
   const [criticalAlert, setCriticalAlert] = useState<string | undefined>();
-  const [activeDirection, setActiveDirection] = useState<'rtl' | 'ltr'>('rtl');
+  const [activeStudyIdInEditor, setActiveStudyIdInEditor] = useState<string>(
+    () => studies[0]?.id || 'study-1'
+  );
+  const [printAutoAction, setPrintAutoAction] = useState<'png' | 'pdf' | null>(null);
 
   // Network Online/Offline state
   const [isOnline, setIsOnline] = useState<boolean>(
@@ -158,6 +186,16 @@ export default function App() {
   // Target Study ID & Mode for Template Drawer
   const [targetStudyIdForTemplate, setTargetStudyIdForTemplate] = useState<string>('study-1');
   const [templateDrawerMode, setTemplateDrawerMode] = useState<'replace' | 'add-new'>('replace');
+
+  // Derive active direction independently from the currently focused study & its modality
+  const currentActiveStudy =
+    studies.find((s) => s.id === activeStudyIdInEditor) || studies[0];
+  const activeDirection: 'rtl' | 'ltr' =
+    currentActiveStudy?.direction ||
+    getDefaultModalityDirection(
+      currentActiveStudy?.modality || modality,
+      settings.modalityDirections
+    );
 
   // Modals & Drawers state
   const [isTemplatesOpen, setIsTemplatesOpen] = useState(false);
@@ -622,6 +660,7 @@ export default function App() {
         return {
           id: `study-${Date.now()}-${idx}-${Math.floor(Math.random() * 1000)}`,
           modality: tpl.modality,
+          direction: getDefaultModalityDirection(tpl.modality, settings.modalityDirections),
           titleAndTechnique: tpl.title + (tpl.technique ? ` - ${tpl.technique}` : ''),
           findingsHtml: processedFindings,
           showComparison: false,
@@ -633,14 +672,14 @@ export default function App() {
         };
       });
     } else {
+      const chosenModDir = getDefaultModalityDirection(chosenMod, settings.modalityDirections);
       initialStudies = [
         {
           id: `study-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
           modality: chosenMod,
-          titleAndTechnique: `گزارش تصویربرداری (${
-            chosenMod === 'mri' ? 'ام‌آر‌آی' : chosenMod === 'ct' ? 'سی‌تی‌اسکن' : 'سونوگرافی'
-          })`,
-          findingsHtml: '<p></p>',
+          direction: chosenModDir,
+          titleAndTechnique: '',
+          findingsHtml: '<p><br></p>',
           showComparison: false,
           comparison: '',
           showImpression: false,
@@ -1028,6 +1067,7 @@ export default function App() {
         const updated: ReportStudy = {
           ...target,
           modality: template.modality,
+          direction: getDefaultModalityDirection(template.modality, settings.modalityDirections),
           titleAndTechnique: template.title + (template.technique ? ` - ${template.technique}` : ''),
           findingsHtml: processedFindings,
           showComparison: false,
@@ -1057,6 +1097,7 @@ export default function App() {
     const newStudy: ReportStudy = {
       id: `study-${Date.now()}`,
       modality: template.modality,
+      direction: getDefaultModalityDirection(template.modality, settings.modalityDirections),
       titleAndTechnique: template.title + (template.technique ? ` - ${template.technique}` : ''),
       findingsHtml: processedFindings,
       showComparison: false,
@@ -1070,21 +1111,31 @@ export default function App() {
     showToast(`قالب «${template.title}» به عنوان تصویربرداری جدید افزوده شد.`);
   };
 
-  // Modality change handler (updates first study or active study)
+  // Modality change handler (updates active study's modality and sets its independent direction: CT & MRI default to LTR, Sonography defaults to RTL)
   const handleSelectModality = (newModality: Modality) => {
     setModality(newModality);
-    // Find first template for new modality
-    const matchingTemplate =
-      templates.find((t) => t.modality === newModality && (t.doctorId === activeDoctorId || t.doctorId === 'all')) ||
-      templates.find((t) => t.modality === newModality);
-
-    if (matchingTemplate && studies.length > 0) {
-      applyTemplateToTargetStudy(matchingTemplate, false);
-    }
+    const modDir = getDefaultModalityDirection(newModality, settings.modalityDirections);
+    setStudies((prev) => {
+      if (prev.length === 0) {
+        return [createDefaultStudy(Boolean(settings.numberSlotsEnabled), newModality, modDir)];
+      }
+      const targetIdx = prev.findIndex(
+        (s) => s.id === (activeStudyIdInEditor || targetStudyIdForTemplate)
+      );
+      const idx = targetIdx >= 0 ? targetIdx : 0;
+      const next = [...prev];
+      next[idx] = {
+        ...next[idx],
+        modality: newModality,
+        direction: modDir,
+      };
+      return next;
+    });
   };
 
   // New report action (in-app modal)
   const confirmNewReport = () => {
+    const modDir = getDefaultModalityDirection(modality, settings.modalityDirections);
     setPatientInfo({
       fullName: '',
       nationalId: '',
@@ -1095,22 +1146,11 @@ export default function App() {
       referringPhysician: '',
     });
     setStudies([
-      {
-        id: `study-${Date.now()}`,
-        modality,
-        titleAndTechnique: `گزارش تصویربرداری (${modality === 'mri' ? 'ام‌آر‌آی' : modality === 'ct' ? 'سی‌تی‌اسکن' : 'سونوگرافی'})`,
-        findingsHtml: '<p>یافته‌های تصویربرداری...</p>',
-        showComparison: false,
-        comparison: '',
-        showImpression: false,
-        impressionHtml: '<p>نتیجه‌گیری...</p>',
-        showRecommendations: false,
-        recommendationsHtml: '',
-      },
+      createDefaultStudy(Boolean(settings.numberSlotsEnabled), modality, modDir),
     ]);
     setCriticalAlert(undefined);
     setIsNewReportModalOpen(false);
-    showToast('گزارش جدید ایجاد شد.');
+    showToast('گزارش خام جدید ایجاد شد.');
   };
 
   // Proposal #12: Match current report in archive to track lock state & version history
@@ -1244,6 +1284,7 @@ export default function App() {
           ? {
               ...s,
               modality: template.modality,
+              direction: getDefaultModalityDirection(template.modality, settings.modalityDirections),
               titleAndTechnique:
                 template.title + (template.technique ? ` - ${template.technique}` : ''),
               findingsHtml: processedFindings,
@@ -1611,7 +1652,12 @@ export default function App() {
           }}
           onEnterWorkspace={(selectedModality) => {
             const targetMod = selectedModality || modality;
-            const blankStudy = createDefaultStudy(Boolean(settings.numberSlotsEnabled), targetMod);
+            const modDir = getDefaultModalityDirection(targetMod, settings.modalityDirections);
+            const blankStudy = createDefaultStudy(
+              Boolean(settings.numberSlotsEnabled),
+              targetMod,
+              modDir
+            );
             const blankPatient: PatientInfo = {
               fullName: '',
               nationalId: '',
@@ -1626,6 +1672,7 @@ export default function App() {
             setStudies([blankStudy]);
             setCriticalAlert(undefined);
             setTargetStudyIdForTemplate(blankStudy.id);
+            setActiveStudyIdInEditor(blankStudy.id);
             setRecoverableDraft(null);
             StorageService.clearDraft();
             const freshTab: PatientWorkspaceTab = {
@@ -1770,7 +1817,34 @@ export default function App() {
             onToggleVoice={toggleVoice}
             hasSpeechSupport={hasSpeechSupport}
             activeDirection={activeDirection}
-            onToggleDirection={() => setActiveDirection((d) => (d === 'rtl' ? 'ltr' : 'rtl'))}
+            onToggleDirection={() => {
+              const nextDir: 'rtl' | 'ltr' = activeDirection === 'rtl' ? 'ltr' : 'rtl';
+              const targetStudy =
+                studies.find((s) => s.id === activeStudyIdInEditor) || studies[0];
+              const targetMod = targetStudy?.modality || modality;
+              if (targetStudy) {
+                handleUpdateStudy(targetStudy.id, { direction: nextDir });
+              }
+              const nextModalityDirs: Record<Modality, 'rtl' | 'ltr'> = {
+                sonography: getDefaultModalityDirection('sonography', settings.modalityDirections),
+                mri: getDefaultModalityDirection('mri', settings.modalityDirections),
+                ct: getDefaultModalityDirection('ct', settings.modalityDirections),
+                [targetMod]: nextDir,
+              };
+              const updatedSettings = {
+                ...settings,
+                modalityDirections: nextModalityDirs,
+              };
+              setSettings(updatedSettings);
+              StorageService.saveSettings({ modalityDirections: nextModalityDirs });
+              showToast(
+                `جهت نوشتار (${
+                  targetMod === 'mri' ? 'MRI' : targetMod === 'ct' ? 'CT Scan' : 'سونوگرافی'
+                }) به صورت مستقل روی ${
+                  nextDir === 'ltr' ? 'انگلیسی (چپ‌به‌راست LTR)' : 'فارسی (راست‌به‌چپ RTL)'
+                } تنظیم شد.`
+              );
+            }}
             onFormatBlock={handleFormatBlock}
             fonts={settings.customFonts || []}
             defaultFont={settings.defaultFont || 'Vazirmatn'}
@@ -1803,6 +1877,7 @@ export default function App() {
               smartSuggestionsEnabled={settings.smartSuggestionsEnabled}
               numberSlotsEnabled={Boolean(settings.numberSlotsEnabled)}
               activeDirection={activeDirection}
+              onActiveStudyChange={(studyId) => setActiveStudyIdInEditor(studyId)}
               onRegisterActiveEditorRef={(el) => (activeEditorRef.current = el)}
               isOnline={isOnline}
               onOpenTemplates={(targetId) => {
@@ -1873,7 +1948,7 @@ export default function App() {
                   </span>
                 </div>
 
-                <div className="flex items-center gap-2 flex-wrap">
+                <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
                   <button
                     type="button"
                     onClick={() => setIsCommandPaletteOpen(true)}
@@ -1898,22 +1973,55 @@ export default function App() {
                       {savedReports.length}
                     </span>
                   </button>
+
                   <button
                     type="button"
                     onClick={() => handleSaveReportToArchive(false)}
-                    className="h-8 px-3.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl shadow-2xs transition-all duration-150 cursor-pointer"
+                    className="h-8 px-3 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl shadow-2xs transition-all duration-150 cursor-pointer"
                   >
-                    ذخیره در آرشیو بیماران
+                    ذخیره در آرشیو
                   </button>
+
+                  {/* Direct 1-Click PNG Download Button */}
                   <button
                     type="button"
-                    onClick={() => setIsPrintOpen(true)}
+                    onClick={() => {
+                      setPrintAutoAction('png');
+                      setIsPrintOpen(true);
+                    }}
+                    className="h-8 px-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-2xs transition-all duration-150 inline-flex items-center gap-1.5 cursor-pointer"
+                    title="دانلود مستقیم تصویر باکیفیت PNG از گزارش سربرگ‌دار A4"
+                  >
+                    <ImageIcon className="w-3.5 h-3.5 shrink-0" />
+                    <span>ذخیره PNG</span>
+                  </button>
+
+                  {/* Direct 1-Click PDF / Print Save Button */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPrintAutoAction('pdf');
+                      setIsPrintOpen(true);
+                    }}
+                    className="h-8 px-3 bg-teal-700 hover:bg-teal-800 text-white font-bold rounded-xl shadow-2xs transition-all duration-150 inline-flex items-center gap-1.5 cursor-pointer"
+                    title="ذخیره مستقیم فایل PDF / باز کردن فوری پنجره چاپ سربرگ A4"
+                  >
+                    <FileDown className="w-3.5 h-3.5 shrink-0" />
+                    <span>ذخیره PDF</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPrintAutoAction(null);
+                      setIsPrintOpen(true);
+                    }}
                     style={{ backgroundColor: 'var(--modality-accent, #0284c7)' }}
-                    className="h-8 px-4 hover:opacity-95 text-white font-bold rounded-xl shadow-xs transition-all duration-150 inline-flex items-center gap-1.5 cursor-pointer"
+                    className="h-8 px-3.5 hover:opacity-95 text-white font-bold rounded-xl shadow-xs transition-all duration-150 inline-flex items-center gap-1.5 cursor-pointer"
                     title="مشاهده پیش‌نمایش سربرگ A4، تنظیمات چاپ و صدور گزارش نهایی"
                   >
                     <Printer className="w-3.5 h-3.5 shrink-0" />
-                    <span>پیش‌نمایش چاپ سربرگ و صدور گزارش</span>
+                    <span>پیش‌نمایش چاپ سربرگ</span>
                   </button>
                 </div>
               </div>
@@ -2397,6 +2505,7 @@ export default function App() {
           setSettings(updated);
           StorageService.saveSettings(updated);
         }}
+        customFonts={settings.customFonts || []}
       />
 
       <TypistAnalyticsModal
@@ -2414,7 +2523,10 @@ export default function App() {
 
       <PrintPreviewModal
         isOpen={isPrintOpen}
-        onClose={() => setIsPrintOpen(false)}
+        onClose={() => {
+          setIsPrintOpen(false);
+          setPrintAutoAction(null);
+        }}
         patientInfo={patientInfo}
         studies={studies}
         doctor={currentDoctor}
@@ -2425,6 +2537,8 @@ export default function App() {
           setSettings(updated);
           StorageService.saveSettings(updated);
         }}
+        initialAutoAction={printAutoAction}
+        onAutoActionComplete={() => setPrintAutoAction(null)}
       />
 
       <ReportHistoryDrawer

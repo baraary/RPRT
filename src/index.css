@@ -491,12 +491,20 @@ span.rad-slot.active-rad-slot {
 
 .dark-theme .printable-report {
   background-color: #ffffff !important;
-  color: #0f172a !important;
+  color: #090d16 !important;
+}
+
+.printable-report {
+  color: #090d16 !important;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 /* Ensure live font-family, font-size, and line-height changes in PrintPreviewModal and SettingsModal apply immediately to all nested header & body elements */
 .printable-header-section {
   font-family: var(--header-font-family, 'Vazirmatn', sans-serif) !important;
+  color: #090d16;
 }
 
 .printable-header-section h1,
@@ -514,10 +522,19 @@ span.rad-slot.active-rad-slot {
 .printable-findings-content div,
 .printable-findings-content li,
 .printable-findings-content ul,
-.printable-findings-content ol {
+.printable-findings-content ol,
+.printable-findings-content span {
   font-family: inherit !important;
   font-size: inherit !important;
   line-height: inherit !important;
+  color: #090d16 !important;
+  font-weight: 500;
+}
+
+.printable-findings-content strong,
+.printable-findings-content b {
+  color: #000000 !important;
+  font-weight: 800 !important;
 }
 
 .printable-report .study-heading,
@@ -550,7 +567,7 @@ span.rad-slot.active-rad-slot {
   }
   .no-print,
   nav,
-  footer {
+  footer:not(.a4-pinned-footer) {
     display: none !important;
   }
   .print-only {
@@ -602,6 +619,7 @@ span.rad-slot.active-rad-slot {
     break-after: auto !important;
   }
   .a4-pinned-footer {
+    display: flex !important;
     margin-top: auto !important;
   }
   .study-box {

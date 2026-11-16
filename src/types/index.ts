@@ -8,6 +8,8 @@ export interface Doctor {
   title: string; // دکتر ...
   clinicName?: string;
   stampText?: string; // متن مهر
+  stampFont?: string; // فونت اختصاصی نام پزشک و مهر در چاپ
+  stampFontSize?: number; // سایز فونت نام پزشک در مهر چاپی (مثلاً 12 تا 18 پیکسل)
   signatureUrl?: string; // تصویر امضا و مهر دیجیتال اختصاصی پزشک
   isDefault?: boolean;
 }
@@ -64,6 +66,7 @@ export interface PatientInfo {
 export interface ReportStudy {
   id: string;
   modality: Modality;
+  direction?: 'rtl' | 'ltr'; // جهت نگارش اختصاصی این بررسی (سونوگرافی پیش‌فرض rtl، سی‌تی و ام‌آر‌آی پیش‌فرض ltr)
   titleAndTechnique: string; // عنوان (شامل نوع تصویربرداری، پروتکل و اطلاعات تصویربرداری)
   findingsHtml: string;
   showComparison: boolean;
@@ -148,6 +151,7 @@ export interface AppSettings {
   editorLineHeight?: number; // فاصله خطوط اختصاصی محیط ویرایشگر متنی (پیش‌فرض 1.9)
   printLineHeight?: number; // فاصله خطوط اختصاصی پیش‌نمایش و چاپ A4 (پیش‌فرض 1.75)
   modalityColors?: ModalityColors; // رنگ اختصاصی هر مدالیته در برنامه و چاپ سربرگ
+  modalityDirections?: Record<Modality, 'rtl' | 'ltr'>; // جهت پیش‌فرض هر مدالیته به صورت مستقل
   customDictionary?: CustomDictionaryTerm[]; // دیکشنری اختصاصی جملات و اصطلاحات پزشکی با اولویت پزشک فعال
   autoSaveInterval: number; // in seconds
   // Letterhead / Header typography customization

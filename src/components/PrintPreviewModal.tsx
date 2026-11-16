@@ -13,7 +13,8 @@ import {
   Type,
 } from 'lucide-react';
 import QRCode from 'qrcode';
-import { toPng } from 'html-to-image';
+import { toSvg } from 'html-to-image';
+import { jsPDF } from 'jspdf';
 import {
   stripSpellHighlights,
   paginateStudiesIntoA4Pages,
@@ -21,6 +22,158 @@ import {
   getOfficialClinicLogoDataUri,
   isOfficialClinicLogoUri,
 } from '../services/typistUtils';
+
+// ============================================================================
+// Pre-Cached Web Font Embedder & Image Loader for Instant, Vector-Sharp Export
+// ============================================================================
+const GOOGLE_REPORT_FONTS_CSS_URL =
+  'https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700;800;900&family=Lalezar&family=Amiri:wght@400;700&family=Noto+Naskh+Arabic:wght@400;600;700&family=Noto+Sans+Arabic:wght@400;600;700;800&family=Markazi+Text:wght@500;700&family=Readex+Pro:wght@400;600;700&display=swap';
+
+const EXTRA_PERSIAN_WOFF2_FONTS: Array<{ family: string; weight: string; url: string }> = [
+  {
+    family: 'Sahel',
+    weight: '400',
+    url: 'https://cdn.jsdelivr.net/gh/rastikerdar/sahel-font@v3.4.0/dist/Sahel.woff2',
+  },
+  {
+    family: 'Sahel',
+    weight: '700',
+    url: 'https://cdn.jsdelivr.net/gh/rastikerdar/sahel-font@v3.4.0/dist/Sahel-Bold.woff2',
+  },
+  {
+    family: 'Samim',
+    weight: '400',
+    url: 'https://cdn.jsdelivr.net/gh/rastikerdar/samim-font@v4.0.5/dist/Samim.woff2',
+  },
+  {
+    family: 'Samim',
+    weight: '700',
+    url: 'https://cdn.jsdelivr.net/gh/rastikerdar/samim-font@v4.0.5/dist/Samim-Bold.woff2',
+  },
+  {
+    family: 'Shabnam',
+    weight: '400',
+    url: 'https://cdn.jsdelivr.net/gh/rastikerdar/shabnam-font@v5.0.1/dist/Shabnam.woff2',
+  },
+  {
+    family: 'Shabnam',
+    weight: '700',
+    url: 'https://cdn.jsdelivr.net/gh/rastikerdar/shabnam-font@v5.0.1/dist/Shabnam-Bold.woff2',
+  },
+  {
+    family: 'Parastoo',
+    weight: '400',
+    url: 'https://cdn.jsdelivr.net/gh/rastikerdar/parastoo-font@v2.0.1/dist/Parastoo.woff2',
+  },
+  {
+    family: 'Parastoo',
+    weight: '700',
+    url: 'https://cdn.jsdelivr.net/gh/rastikerdar/parastoo-font@v2.0.1/dist/Parastoo-Bold.woff2',
+  },
+  {
+    family: 'Tanha',
+    weight: '400',
+    url: 'https://cdn.jsdelivr.net/gh/rastikerdar/tanha-font@v0.10/dist/Tanha.woff2',
+  },
+];
+
+const fontUrlDataCache = new Map<string, string>();
+let baseGoogleFontEmbedPromise: Promise<string> | null = null;
+
+async function fetchUrlAsBase64DataUri(url: string): Promise<string> {
+  const cached = fontUrlDataCache.get(url);
+  if (cached) return cached;
+  const res = await fetch(url, { cache: 'force-cache', mode: 'cors' });
+  if (!res.ok) throw new Error(`Font fetch status ${res.status}`);
+  const blob = await res.blob();
+  const dataUri = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(String(reader.result || ''));
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+  fontUrlDataCache.set(url, dataUri);
+  return dataUri;
+}
+
+function getPrewarmedGoogleFontEmbedCss(): Promise<string> {
+  if (baseGoogleFontEmbedPromise) return baseGoogleFontEmbedPromise;
+  baseGoogleFontEmbedPromise = (async () => {
+    try {
+      const res = await fetch(GOOGLE_REPORT_FONTS_CSS_URL, { cache: 'force-cache', mode: 'cors' });
+      if (!res.ok) return '';
+      let cssText = await res.text();
+      const urlMatches = Array.from(cssText.matchAll(/url\((['"]?)(https:\/\/[^)'"]+)\1\)/g));
+      const uniqueUrls = Array.from(new Set(urlMatches.map((m) => m[2])));
+      await Promise.all(
+        uniqueUrls.map(async (u) => {
+          try {
+            const dataUri = await fetchUrlAsBase64DataUri(u);
+            if (dataUri) {
+              cssText = cssText.split(u).join(dataUri);
+            }
+          } catch {}
+        })
+      );
+      return cssText;
+    } catch {
+      return '';
+    }
+  })();
+  return baseGoogleFontEmbedPromise;
+}
+
+async function getFastEmbeddedFontCss(activeCssFontStacks: string[]): Promise<string> {
+  const googleCss = await getPrewarmedGoogleFontEmbedCss();
+  const combinedStacks = activeCssFontStacks.join(' ').toLowerCase();
+  const extraRules: string[] = [];
+
+  const neededExtras = EXTRA_PERSIAN_WOFF2_FONTS.filter((f) =>
+    combinedStacks.includes(f.family.toLowerCase())
+  );
+  if (neededExtras.length > 0) {
+    await Promise.all(
+      neededExtras.map(async (f) => {
+        try {
+          const dataUri = await fetchUrlAsBase64DataUri(f.url);
+          if (dataUri) {
+            extraRules.push(
+              `@font-face { font-family: '${f.family}'; font-style: normal; font-weight: ${f.weight}; src: url(${dataUri}) format('woff2'); }`
+            );
+          }
+        } catch {}
+      })
+    );
+  }
+  return [googleCss, ...extraRules].join('\n');
+}
+
+// Warm up fonts in background immediately when module loads
+if (typeof window !== 'undefined') {
+  setTimeout(() => {
+    getPrewarmedGoogleFontEmbedCss();
+  }, 50);
+}
+
+function loadDecodedImage(src: string): Promise<HTMLImageElement | null> {
+  if (!src) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      if (img.decode) {
+        img
+          .decode()
+          .then(() => resolve(img))
+          .catch(() => resolve(img));
+      } else {
+        resolve(img);
+      }
+    };
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+}
 
 interface PrintPreviewModalProps {
   isOpen: boolean;
@@ -31,6 +184,8 @@ interface PrintPreviewModalProps {
   settings: AppSettings;
   onRecordPrintedReport?: () => void;
   onUpdateSettings?: (updates: Partial<AppSettings>) => void;
+  initialAutoAction?: 'png' | 'pdf' | null;
+  onAutoActionComplete?: () => void;
 }
 
 // Custom Paper-Feed Animated SVG Icon (mimics a sheet feeding through printer rollers)
@@ -69,6 +224,8 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   settings,
   onRecordPrintedReport,
   onUpdateSettings,
+  initialAutoAction,
+  onAutoActionComplete,
 }) => {
   const [copied, setCopied] = useState(false);
   const [forcePageBreakPerStudy, setForcePageBreakPerStudy] = useState(
@@ -98,6 +255,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   const [isQrInspectOpen, setIsQrInspectOpen] = useState(false);
   const [printSuccessFeedback, setPrintSuccessFeedback] = useState(false);
   const [isExportingImage, setIsExportingImage] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [shareFeedback, setShareFeedback] = useState<string>('');
   const printAreaRef = useRef<HTMLDivElement>(null);
   const pageRefs = useRef<Array<HTMLDivElement | null>>([]);
@@ -135,21 +293,36 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   };
   const activeModalityColor = getModalityColorHex(primaryModality);
 
-  // Format font-family safely without overriding custom font stacks
+  // Format font-family safely and ALWAYS append loaded Google Web Fonts ('Vazirmatn', 'Lalezar', 'Amiri') so host systems without local fonts (B Titr, B Nazanin, etc.) never scramble layout
   const formatCssFontStack = (fontVal: string) => {
     const trimmed = (fontVal || "'Vazirmatn', sans-serif").trim();
-    if (trimmed === 'Vazirmatn') {
-      return "'Vazirmatn', sans-serif";
+    const cleanName = trimmed.replace(/['"]/g, '').split(',')[0].trim();
+    if (!cleanName || cleanName.toLowerCase() === 'vazirmatn') {
+      return "'Vazirmatn', 'Noto Naskh Arabic', Tahoma, sans-serif";
     }
-    if (trimmed.includes(',') || trimmed.includes("'") || trimmed.includes('"')) {
-      return trimmed;
+    if (cleanName.toLowerCase().includes('titr') || cleanName.toLowerCase().includes('lalezar')) {
+      return `'${cleanName}', 'Lalezar', 'Vazirmatn', Tahoma, sans-serif`;
     }
-    return `'${trimmed}', sans-serif`;
+    if (
+      cleanName.toLowerCase().includes('nazanin') ||
+      cleanName.toLowerCase().includes('amiri') ||
+      cleanName.toLowerCase().includes('naskh') ||
+      cleanName.toLowerCase().includes('zar') ||
+      cleanName.toLowerCase().includes('lotus') ||
+      cleanName.toLowerCase().includes('mitra')
+    ) {
+      return `'${cleanName}', 'Amiri', 'Noto Naskh Arabic', 'Vazirmatn', Tahoma, serif`;
+    }
+    return `'${cleanName}', 'Vazirmatn', 'Noto Naskh Arabic', Tahoma, sans-serif`;
   };
 
   const resolvedHeaderFontCss = formatCssFontStack(headerFont);
   const resolvedHeadingFontCss = formatCssFontStack(headingFont);
   const resolvedBodyFontCss = formatCssFontStack(bodyFont);
+  const resolvedDoctorStampFontCss = formatCssFontStack(
+    doctor.stampFont || headerFont || "'Vazirmatn', sans-serif"
+  );
+  const resolvedDoctorStampFontSize = doctor.stampFontSize || 13;
 
   // Shared deterministic A4 pagination engine (100% synced with RichMedicalEditor A4 meter)
   const paginationResult = useMemo(() => {
@@ -220,15 +393,25 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
       .catch((err) => console.error('QR code generation error', err));
   }, [isOpen, patientInfo, studies, doctor, qrMode]);
 
-  if (!isOpen) return null;
-
   const rawLogoUrl = settings.clinicLogoUrl || DEFAULT_CLINIC_LOGO_DATA_URI;
   const effectiveLogoUrl = isOfficialClinicLogoUri(rawLogoUrl)
     ? getOfficialClinicLogoDataUri(activeModalityColor)
     : rawLogoUrl;
-  const effectiveSignatureUrl = doctor.signatureUrl || '';
 
-  // Standalone full-fidelity HTML generator matching multi-page A4 preview 100% (works 100% offline!)
+  // Sanitize any legacy SVG signature data URI that contained <text> tags so canvas/PNG export never scrambles signature text
+  const rawSignatureUrl = doctor.signatureUrl || '';
+  const effectiveSignatureUrl = rawSignatureUrl.includes('RADIOLOGY')
+    ? rawSignatureUrl.replace(
+        encodeURIComponent(
+          '<text x="62" y="48" font-family="Tahoma, sans-serif" font-size="10" font-weight="bold" fill="#0f766e" text-anchor="middle" opacity="0.85">RADIOLOGY</text>'
+        ),
+        encodeURIComponent(
+          '<path d="M62 24 L65 37 L78 37 L67 45 L71 58 L62 50 L53 58 L57 45 L46 37 L59 37 Z" fill="none" stroke="#0f766e" stroke-width="1.4" opacity="0.55"/>'
+        )
+      )
+    : rawSignatureUrl;
+
+  // Standalone full-fidelity HTML generator matching multi-page A4 preview 100% (includes Google Web Fonts & guaranteed visible footer)
   const getFullPrintableDocumentHtml = () => {
     const rawContent = stripSpellHighlights(printAreaRef.current?.innerHTML || '', true);
 
@@ -257,6 +440,9 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>&lrm;</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Amiri:ital,wght@0,400;0,700;1,400;1,700&family=Lalezar&family=Markazi+Text:wght@400..700&family=Noto+Naskh+Arabic:wght@400..700&family=Noto+Sans+Arabic:wght@300..800&family=Readex+Pro:wght@300..700&family=Vazirmatn:wght@100..900&display=swap" rel="stylesheet">
   <style>
     ${compiledCss}
     @page {
@@ -282,9 +468,11 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
     .a4-sheet-page {
       width: 210mm;
       min-height: 297mm;
-      height: 297mm;
       margin: 0 auto 24px auto;
       background: #ffffff;
+      color: #050811;
+      position: relative;
+      overflow: hidden;
       padding: ${preprintedLetterheadMode ? `${preprintedTopMarginMm}mm 15mm 14mm 15mm` : '12mm 15mm 12mm 15mm'};
       box-shadow: 0 8px 30px rgba(0,0,0,0.15);
       border-radius: 12px;
@@ -293,14 +481,39 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
       justify-content: space-between !important;
       page-break-after: always;
       break-after: page;
-      overflow: hidden;
+      animation: none !important;
+      transform: none !important;
+      opacity: 1 !important;
+    }
+    .a4-watermark-logo {
+      position: absolute !important;
+      inset: 0 !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      pointer-events: none !important;
+      z-index: 0 !important;
+      overflow: hidden !important;
+    }
+    .a4-watermark-logo img {
+      width: 92mm !important;
+      height: 92mm !important;
+      object-fit: contain !important;
+      opacity: 0.065 !important;
     }
     .a4-sheet-page:last-of-type {
       page-break-after: auto;
       break-after: auto;
     }
     .a4-pinned-footer {
+      display: flex !important;
+      visibility: visible !important;
+      opacity: 1 !important;
       margin-top: auto !important;
+      padding-top: 14px !important;
+      width: 100% !important;
+      position: relative !important;
+      z-index: 10 !important;
     }
     .printable-header-section,
     .printable-header-section * {
@@ -312,6 +525,10 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
     .study-box h3 {
       font-family: ${resolvedHeadingFontCss} !important;
       font-size: ${headingFontSize}px !important;
+    }
+    .doctor-stamp-box,
+    .doctor-stamp-box * {
+      font-family: ${resolvedDoctorStampFontCss} !important;
     }
     .impression-box {
       background-color: #f8fafc !important;
@@ -331,9 +548,14 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
         margin: 0 auto !important;
         width: 210mm !important;
         min-height: 297mm !important;
-        height: 297mm !important;
         border-radius: 0 !important;
         ${monochromePrintMode ? 'filter: grayscale(100%) contrast(120%) !important; color: #000000 !important;' : ''}
+      }
+      .a4-pinned-footer {
+        display: flex !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        margin-top: auto !important;
       }
       .no-print {
         display: none !important;
@@ -379,9 +601,17 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   </div>
   <script>
     window.onload = function() {
-      setTimeout(function() {
-        try { window.print(); } catch(e) {}
-      }, 450);
+      if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(function() {
+          setTimeout(function() {
+            try { window.print(); } catch(e) {}
+          }, 350);
+        });
+      } else {
+        setTimeout(function() {
+          try { window.print(); } catch(e) {}
+        }, 500);
+      }
     };
   </script>
 </body>
@@ -476,6 +706,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
         .study-box { margin-bottom: 25px; padding-bottom: 15px; border-bottom: 1px solid #cbd5e1; page-break-inside: avoid; }
         .study-heading { font-family: '${settings.headingFont || 'Vazirmatn'}'; font-size: ${settings.headingFontSize || '16px'}; font-weight: bold; }
         .impression-box { background-color: #f8fafc; border: 2px solid #0f766e; padding: 12px; margin-top: 15px; }
+        .a4-watermark-logo { display: none !important; }
       </style>
       </head><body dir='rtl'>
     `;
@@ -502,14 +733,128 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Multi-Page High-Resolution A4 PNG Image Export (exports each A4 sheet as its own PNG image)
+  // Shared ultra-fast, true-vector High-DPI Canvas Renderer for both PNG and PDF exports
+  const renderSheetToHighResCanvas = async (
+    sheetEl: HTMLElement,
+    scale = 2.6
+  ): Promise<HTMLCanvasElement> => {
+    const width = sheetEl.clientWidth || 794;
+    const height = sheetEl.clientHeight || 1123;
+    const targetWidth = Math.round(width * scale);
+    const targetHeight = Math.round(height * scale);
+
+    // 1. Get pre-cached embedded @font-face CSS (0ms after warm-up) + decode any images in parallel
+    const [fontEmbedCSS, watermarkImg] = await Promise.all([
+      getFastEmbeddedFontCss([
+        resolvedHeaderFontCss,
+        resolvedHeadingFontCss,
+        resolvedBodyFontCss,
+        resolvedDoctorStampFontCss,
+      ]),
+      !preprintedLetterheadMode && effectiveLogoUrl
+        ? loadDecodedImage(effectiveLogoUrl)
+        : Promise.resolve(null),
+    ]);
+
+    // 2. Generate SVG via html-to-image (skipping stylesheet crawling via fontEmbedCSS, and excluding DOM watermark so we composite it natively)
+    const rawSvgDataUrl = await toSvg(sheetEl, {
+      width,
+      height,
+      fontEmbedCSS,
+      cacheBust: false,
+      filter: (node: HTMLElement) => {
+        if (node?.classList?.contains('a4-watermark-logo')) return false;
+        if (node?.classList?.contains('no-print')) return false;
+        return true;
+      },
+      style: {
+        animation: 'none',
+        transform: 'none',
+        opacity: '1',
+        borderRadius: '0px',
+        boxShadow: 'none',
+        margin: '0',
+        backgroundColor: '#ffffff',
+        color: '#090d16',
+        WebkitFontSmoothing: 'antialiased',
+      } as Partial<CSSStyleDeclaration>,
+    });
+
+    // 3. Fix Chromium <foreignObject> 1x upscaling bug:
+    // By setting the root <svg> width/height to targetWidth/targetHeight while keeping viewBox="0 0 width height",
+    // Chromium's Skia engine rasterizes all fonts inside <foreignObject> at true 2.6x vector resolution (~250 DPI)!
+    // Also restore integer font-sizes that html-to-image reduced by 0.1px (e.g. 13.9px -> 14px).
+    const commaIdx = rawSvgDataUrl.indexOf(',');
+    let finalSvgDataUrl = rawSvgDataUrl;
+    if (commaIdx !== -1) {
+      let svgMarkup = decodeURIComponent(rawSvgDataUrl.slice(commaIdx + 1));
+      svgMarkup = svgMarkup
+        .replace(
+          new RegExp(`width="${width}"\\s+height="${height}"`),
+          `width="${targetWidth}" height="${targetHeight}"`
+        )
+        .replace(/font-size:\s*(\d+)\.9px/g, (_m, d) => `font-size: ${Number(d) + 1}px`);
+      finalSvgDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgMarkup)}`;
+    }
+
+    const renderedSheetImg = await loadDecodedImage(finalSvgDataUrl);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return canvas;
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
+    // Layer 1: Pure White Paper Background
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, targetWidth, targetHeight);
+
+    // Layer 2: Crisp Vector-Rasterized Report Sheet
+    if (renderedSheetImg) {
+      ctx.drawImage(renderedSheetImg, 0, 0, targetWidth, targetHeight);
+    }
+
+    // Layer 3: Centered Clinic Logo Watermark drawn with 'multiply' blend mode
+    // ('multiply' tints white background areas at 6.5% opacity while keeping dark text 100% black and sharp!)
+    if (watermarkImg && !preprintedLetterheadMode) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'multiply';
+      ctx.globalAlpha = 0.065;
+      if (monochromePrintMode) {
+        ctx.filter = 'grayscale(100%)';
+      }
+      const maxWmSize = Math.round(targetWidth * 0.44);
+      const natW = watermarkImg.naturalWidth || 800;
+      const natH = watermarkImg.naturalHeight || 922;
+      const aspect = natW / natH;
+      let wmW = maxWmSize;
+      let wmH = maxWmSize;
+      if (aspect >= 1) {
+        wmH = Math.round(maxWmSize / aspect);
+      } else {
+        wmW = Math.round(maxWmSize * aspect);
+      }
+      const wmX = Math.round((targetWidth - wmW) / 2);
+      const wmY = Math.round((targetHeight - wmH) / 2);
+      ctx.drawImage(watermarkImg, wmX, wmY, wmW, wmH);
+      ctx.restore();
+    }
+
+    return canvas;
+  };
+
+  // Multi-Page High-Resolution A4 PNG Image Export
   const handleExportPngImage = async () => {
-    if (isExportingImage) return;
+    if (isExportingImage || isExportingPdf) return;
     setIsExportingImage(true);
     try {
       if (onRecordPrintedReport) {
         onRecordPrintedReport();
       }
+
       const total = paginationResult.totalPages;
       const baseName = `Report_Image_${patientInfo.nationalId || patientInfo.admissionNumber || 'Radiology'}_${
         patientInfo.fullName || 'Patient'
@@ -518,25 +863,27 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
       for (let i = 0; i < total; i++) {
         const sheetEl = pageRefs.current[i];
         if (!sheetEl) continue;
-        const dataUrl = await toPng(sheetEl, {
-          pixelRatio: 2.5,
-          backgroundColor: '#ffffff',
-          cacheBust: true,
-          skipFonts: true,
-          fontEmbedCSS: '',
-        });
+
+        const canvas = await renderSheetToHighResCanvas(sheetEl, 2.6);
+        const blob = await new Promise<Blob | null>((resolve) =>
+          canvas.toBlob((b) => resolve(b), 'image/png')
+        );
+        const downloadUrl = blob ? URL.createObjectURL(blob) : canvas.toDataURL('image/png');
         const link = document.createElement('a');
         link.download = total > 1 ? `${baseName}_Page${i + 1}.png` : `${baseName}.png`;
-        link.href = dataUrl;
+        link.href = downloadUrl;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+        if (blob) {
+          setTimeout(() => URL.revokeObjectURL(downloadUrl), 5000);
+        }
       }
 
       setShareFeedback(
         total > 1
-          ? `✓ ${total} برگه تصویر باکیفیت PNG (برگه ۱ تا ${total}) به صورت جداگانه دانلود شد.`
-          : '✓ تصویر باکیفیت PNG برگه گزارش دانلود شد.'
+          ? `✓ ${total} برگه تصویر باکیفیت PNG (برگه ۱ تا ${total}) با فونت شارپ دانلود شد.`
+          : '✓ تصویر باکیفیت و شارپ PNG برگه گزارش دانلود شد.'
       );
       setTimeout(() => setShareFeedback(''), 4000);
     } catch (err) {
@@ -545,6 +892,72 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
       setIsExportingImage(false);
     }
   };
+
+  // Direct Multi-Page A4 PDF File Download (uses high-DPI JPEG stream for instant <250ms PDF generation with watermark & sharp fonts)
+  const handleExportPdfFile = async () => {
+    if (isExportingPdf || isExportingImage) return;
+    setIsExportingPdf(true);
+    try {
+      if (onRecordPrintedReport) {
+        onRecordPrintedReport();
+      }
+
+      const total = paginationResult.totalPages;
+      const baseName = `Report_PDF_${patientInfo.nationalId || patientInfo.admissionNumber || 'Radiology'}_${
+        patientInfo.fullName || 'Patient'
+      }`;
+
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4',
+        compress: true,
+      });
+
+      let addedPages = 0;
+      for (let i = 0; i < total; i++) {
+        const sheetEl = pageRefs.current[i];
+        if (!sheetEl) continue;
+
+        const canvas = await renderSheetToHighResCanvas(sheetEl, 2.6);
+        const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.98);
+        if (addedPages > 0) {
+          pdf.addPage('a4', 'portrait');
+        }
+        pdf.addImage(jpegDataUrl, 'JPEG', 0, 0, 210, 297);
+        addedPages++;
+      }
+
+      if (addedPages > 0) {
+        pdf.save(`${baseName}.pdf`);
+        setShareFeedback(
+          total > 1
+            ? `✓ فایل PDF چندبرگه‌ای گزارش (${total} صفحه A4) با موفقیت دانلود شد.`
+            : '✓ فایل PDF باکیفیت گزارش (A4) با موفقیت دانلود شد.'
+        );
+        setTimeout(() => setShareFeedback(''), 4000);
+      }
+    } catch (err) {
+      console.warn('PDF export warning:', err);
+      handleDownloadPrintHtml();
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
+  // Auto-trigger direct PNG or PDF export when opened from the bottom dock quick buttons
+  useEffect(() => {
+    if (!isOpen || !initialAutoAction || !qrDataUrl) return;
+    const timer = window.setTimeout(() => {
+      if (initialAutoAction === 'png') {
+        handleExportPngImage();
+      } else if (initialAutoAction === 'pdf') {
+        handleExportPdfFile();
+      }
+      onAutoActionComplete?.();
+    }, 60);
+    return () => window.clearTimeout(timer);
+  }, [isOpen, initialAutoAction, qrDataUrl]);
 
   // Quick Share for WhatsApp / Telegram / Native Share
   const handleQuickShareReport = async () => {
@@ -563,27 +976,25 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
       const firstSheet = pageRefs.current[0] || printAreaRef.current;
       if (typeof navigator !== 'undefined' && navigator.share && firstSheet) {
         try {
-          const dataUrl = await toPng(firstSheet, {
-            pixelRatio: 2,
-            backgroundColor: '#ffffff',
-            skipFonts: true,
-            fontEmbedCSS: '',
-          });
-          const res = await fetch(dataUrl);
-          const blob = await res.blob();
-          const file = new File(
-            [blob],
-            `Radiology_Report_${patientInfo.admissionNumber || '001'}.png`,
-            { type: 'image/png' }
+          const canvas = await renderSheetToHighResCanvas(firstSheet, 2.2);
+          const blob = await new Promise<Blob | null>((resolve) =>
+            canvas.toBlob((b) => resolve(b), 'image/png')
           );
-          if (navigator.canShare && navigator.canShare({ files: [file] })) {
-            await navigator.share({
-              title: `گزارش تصویربرداری ${patientInfo.fullName || ''}`,
-              text: summaryText,
-              files: [file],
-            });
-            setIsExportingImage(false);
-            return;
+          if (blob) {
+            const file = new File(
+              [blob],
+              `Radiology_Report_${patientInfo.admissionNumber || '001'}.png`,
+              { type: 'image/png' }
+            );
+            if (navigator.canShare && navigator.canShare({ files: [file] })) {
+              await navigator.share({
+                title: `گزارش تصویربرداری ${patientInfo.fullName || ''}`,
+                text: summaryText,
+                files: [file],
+              });
+              setIsExportingImage(false);
+              return;
+            }
           }
           await navigator.share({
             title: `گزارش تصویربرداری ${patientInfo.fullName || ''}`,
@@ -604,6 +1015,8 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
       setIsExportingImage(false);
     }
   };
+
+  if (!isOpen) return null;
 
   const clinicNameDisplay = settings.clinicName || 'مرکز جامع تصویربرداری بیمارستان شفا';
   const clinicSubtitleDisplay =
@@ -836,25 +1249,43 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
               {/* Multi-Page High-Res PNG Image Export */}
               <button
                 type="button"
-                disabled={isExportingImage}
+                disabled={isExportingImage || isExportingPdf}
                 onClick={handleExportPngImage}
                 className="h-8 flex items-center gap-1.5 text-xs font-bold px-3 bg-indigo-900/90 hover:bg-indigo-800 text-indigo-100 border border-indigo-700 rounded-xl transition-colors shadow-xs cursor-pointer disabled:opacity-50"
-                title="خروجی تصویر باکیفیت (PNG) از تمام برگه‌های A4 گزارش"
+                title="خروجی تصویر باکیفیت و شارپ (PNG) از تمام برگه‌های A4 گزارش"
               >
                 <ImageIcon className="w-3.5 h-3.5 text-indigo-300" />
                 <span>
                   {isExportingImage
-                    ? 'در حال ساخت تصویر...'
+                    ? 'در حال ساخت PNG...'
                     : paginationResult.totalPages > 1
-                    ? `خروجی تصویر (${paginationResult.totalPages} برگه PNG)`
-                    : 'خروجی تصویر (PNG)'}
+                    ? `ذخیره PNG (${paginationResult.totalPages} برگه)`
+                    : 'ذخیره PNG'}
+                </span>
+              </button>
+
+              {/* Direct Multi-Page PDF Download */}
+              <button
+                type="button"
+                disabled={isExportingPdf || isExportingImage}
+                onClick={handleExportPdfFile}
+                className="h-8 flex items-center gap-1.5 text-xs font-bold px-3 bg-rose-700 hover:bg-rose-600 text-white border border-rose-500 rounded-xl transition-colors shadow-xs cursor-pointer disabled:opacity-50"
+                title="دانلود مستقیم فایل PDF استاندارد A4 روی سیستم"
+              >
+                <FileDown className="w-4 h-4 text-rose-200" />
+                <span>
+                  {isExportingPdf
+                    ? 'در حال ساخت PDF...'
+                    : paginationResult.totalPages > 1
+                    ? `ذخیره مستقیم PDF (${paginationResult.totalPages} صفحه)`
+                    : 'ذخیره مستقیم PDF'}
                 </span>
               </button>
 
               {/* Quick Share */}
               <button
                 type="button"
-                disabled={isExportingImage}
+                disabled={isExportingImage || isExportingPdf}
                 onClick={handleQuickShareReport}
                 className="h-8 flex items-center gap-1.5 text-xs font-bold px-3 bg-emerald-900/90 hover:bg-emerald-800 text-emerald-100 border border-emerald-700 rounded-xl transition-colors shadow-xs cursor-pointer disabled:opacity-50"
               >
@@ -869,17 +1300,17 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                 className="h-8 flex items-center gap-1.5 text-xs font-bold px-3 bg-teal-800 hover:bg-teal-700 text-teal-100 rounded-xl transition-colors shadow-xs cursor-pointer"
               >
                 <FileDown className="w-4 h-4 text-teal-300" />
-                <span>دانلود فایل چاپ (HTML/PDF)</span>
+                <span>فایل HTML</span>
               </button>
 
               {/* Standard Print Button */}
               <button
                 type="button"
                 onClick={handlePrint}
-                className="group h-8 flex items-center gap-1.5 text-xs font-bold px-4 bg-teal-500 hover:bg-teal-400 text-slate-950 rounded-xl transition-all duration-200 active:scale-95 shadow-xs cursor-pointer"
+                className="group h-8 flex items-center gap-1.5 text-xs font-bold px-3.5 bg-teal-500 hover:bg-teal-400 text-slate-950 rounded-xl transition-all duration-200 active:scale-95 shadow-xs cursor-pointer"
               >
                 <PaperFeedPrinterIcon activeFeed={printSuccessFeedback} className="w-4 h-4" />
-                <span>{printSuccessFeedback ? 'در حال چاپ سربرگ...' : 'چاپ سربرگ (Print / PDF)'}</span>
+                <span>{printSuccessFeedback ? 'در حال چاپ سربرگ...' : 'چاپ مستقیم (Print)'}</span>
               </button>
             </div>
           </div>
@@ -919,7 +1350,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                   ref={(el) => {
                     pageRefs.current[pageIdx] = el;
                   }}
-                  className={`printable-report a4-sheet-page bg-white text-slate-900 w-full max-w-[210mm] min-h-[297mm] p-6 sm:p-10 md:p-11 shadow-2xl rounded-2xl relative box-border break-words [word-break:break-word] shrink-0 flex flex-col justify-between animate-fadeSlideUp ${
+                  className={`printable-report a4-sheet-page bg-white text-slate-950 w-full max-w-[210mm] min-h-[297mm] p-6 sm:p-10 md:p-11 shadow-2xl rounded-2xl relative overflow-hidden box-border break-words [word-break:break-word] shrink-0 flex flex-col justify-between ${
                     monochromePrintMode ? 'grayscale contrast-125' : ''
                   }`}
                   style={
@@ -930,13 +1361,46 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                       fontSize: `${bodyFontSize || 14}px`,
                       lineHeight: unifiedLineHeight,
                       direction: 'rtl',
+                      color: '#050811',
+                      WebkitFontSmoothing: 'antialiased',
+                      textRendering: 'geometricPrecision',
                       paddingTop: preprintedLetterheadMode ? `${preprintedTopMarginMm}mm` : undefined,
                     } as React.CSSProperties
                   }
                 >
+                  {/* Ultra-Faint Centered Clinic Logo Watermark in the Background of the Printed Report */}
+                  {!preprintedLetterheadMode && effectiveLogoUrl && (
+                    <div
+                      aria-hidden="true"
+                      className="a4-watermark-logo pointer-events-none select-none absolute inset-0 flex items-center justify-center z-0 overflow-hidden"
+                      style={{
+                        position: 'absolute',
+                        inset: 0,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        pointerEvents: 'none',
+                        zIndex: 0,
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <img
+                        src={effectiveLogoUrl}
+                        alt=""
+                        className="w-[92mm] h-[92mm] object-contain"
+                        style={{
+                          width: '92mm',
+                          height: '92mm',
+                          objectFit: 'contain',
+                          opacity: 0.065,
+                        }}
+                      />
+                    </div>
+                  )}
+
                   {/* TOP SECTION: Official Clinic Letterhead + Patient Demographics Box */}
                   <header
-                    className="printable-header-section shrink-0"
+                    className="printable-header-section relative z-10 shrink-0"
                     style={
                       {
                         '--header-font-family': resolvedHeaderFontCss,
@@ -959,7 +1423,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                           />
                           <div className="space-y-1">
                             <h1
-                              className="font-bold text-slate-900 tracking-tight leading-snug"
+                              className="font-black text-slate-950 tracking-tight leading-snug"
                               style={{
                                 fontFamily: resolvedHeaderFontCss,
                                 fontSize: `${headerFontSize}px`,
@@ -968,7 +1432,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                               {clinicNameDisplay}
                             </h1>
                             <p
-                              className="font-bold"
+                              className="font-extrabold"
                               style={{
                                 fontFamily: resolvedHeaderFontCss,
                                 fontSize: `${Math.max(11, Math.round(headerFontSize * 0.67))}px`,
@@ -978,7 +1442,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                               {clinicSubtitleDisplay}
                             </p>
                             <p
-                              className="text-slate-600"
+                              className="text-slate-800 font-semibold"
                               style={{
                                 fontFamily: resolvedHeaderFontCss,
                                 fontSize: `${Math.max(10, Math.round(headerFontSize * 0.58))}px`,
@@ -989,25 +1453,20 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                           </div>
                         </div>
 
-                        {/* Header Left Demographic Summary */}
+                        {/* Header Left Demographic Summary (National ID removed from here so it only appears once in the Patient Demographics Box below) */}
                         <div
                           className="text-left space-y-0.5 shrink-0"
                           style={{ fontFamily: resolvedHeaderFontCss }}
                         >
-                          <div className="text-[11px] font-bold text-slate-800">
+                          <div className="text-[11px] font-extrabold text-slate-950">
                             شماره پذیرش: {patientInfo.admissionNumber || 'ADM-001'}
                           </div>
-                          <div className="text-[10px] text-slate-600">
+                          <div className="text-[10.5px] font-bold text-slate-800">
                             تاریخ: {patientInfo.reportDate || '۱۴۰۴/۰۸/۲۱'}
                           </div>
-                          {patientInfo.nationalId && (
-                            <div className="text-[10px] text-slate-500">
-                              کد ملی: {patientInfo.nationalId}
-                            </div>
-                          )}
                           {paginationResult.totalPages > 1 && (
                             <div
-                              className="text-[10px] font-bold pt-0.5"
+                              className="text-[10px] font-extrabold pt-0.5"
                               style={{ color: monochromePrintMode ? '#000000' : activeModalityColor }}
                             >
                               برگه {sheet.pageNumber} از {paginationResult.totalPages}
@@ -1031,7 +1490,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                       className={`my-3 p-3 rounded-xl border ${
                         monochromePrintMode
                           ? 'bg-white border-black text-black'
-                          : 'bg-slate-50 border-slate-300'
+                          : 'bg-slate-50/90 border-slate-400'
                       }`}
                       style={{
                         fontFamily: resolvedHeaderFontCss,
@@ -1040,18 +1499,18 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                     >
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-y-1.5 gap-x-4">
                         <div>
-                          <span className="text-slate-500 font-medium">نام بیمار: </span>
-                          <strong className="text-slate-900">{patientInfo.fullName || '---'}</strong>
+                          <span className="text-slate-800 font-bold">نام بیمار: </span>
+                          <strong className="text-slate-950 font-black">{patientInfo.fullName || '---'}</strong>
                         </div>
                         <div>
-                          <span className="text-slate-500 font-medium">کد ملی / شناسه: </span>
-                          <strong className="text-slate-900" dir="ltr">
+                          <span className="text-slate-800 font-bold">کد ملی / شناسه: </span>
+                          <strong className="text-slate-950 font-black" dir="ltr">
                             {patientInfo.nationalId || '---'}
                           </strong>
                         </div>
                         <div>
-                          <span className="text-slate-500 font-medium">سن و جنس: </span>
-                          <strong className="text-slate-900">
+                          <span className="text-slate-800 font-bold">سن و جنس: </span>
+                          <strong className="text-slate-950 font-black">
                             {patientInfo.age ? `${patientInfo.age} سال` : '---'} /{' '}
                             {patientInfo.gender === 'female'
                               ? 'زن'
@@ -1061,8 +1520,8 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                           </strong>
                         </div>
                         <div>
-                          <span className="text-slate-500 font-medium">پزشک معالج: </span>
-                          <strong className="text-slate-900">
+                          <span className="text-slate-800 font-bold">پزشک معالج: </span>
+                          <strong className="text-slate-950 font-black">
                             {patientInfo.referringPhysician || 'همکار گرامی'}
                           </strong>
                         </div>
@@ -1071,35 +1530,61 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                   </header>
 
                   {/* MIDDLE SECTION (flex-1): Studies & Findings for this A4 Sheet */}
-                  <div className="flex-1 py-2 space-y-5">
+                  <div className="relative z-10 flex-1 py-2 space-y-5">
                     {sheet.slices.map((slice, sIdx) => {
                       const { study } = slice;
                       const studyModColor = getModalityColorHex(study.modality);
+                      const studyDir: 'rtl' | 'ltr' =
+                        study.direction || (study.modality === 'sonography' ? 'rtl' : 'ltr');
+                      const isLtr = studyDir === 'ltr';
+
                       return (
                         <div
                           key={slice.sliceKey}
+                          dir={studyDir}
+                          style={{
+                            direction: studyDir,
+                            textAlign: isLtr ? 'left' : 'right',
+                          }}
                           className={`study-box w-full break-words [word-break:break-word] ${
-                            sIdx > 0 ? 'pt-4 border-t-2 border-dashed border-slate-300' : ''
+                            sIdx > 0 ? 'pt-4 border-t-2 border-dashed border-slate-400' : ''
                           }`}
                         >
-                          {/* Study Title & Technique Header */}
-                          <div className="mb-2">
+                          {/* Study Title & Technique Header (Respects LTR/RTL direction of the study) */}
+                          <div
+                            className="mb-2"
+                            dir={studyDir}
+                            style={{
+                              direction: studyDir,
+                              textAlign: isLtr ? 'left' : 'right',
+                            }}
+                          >
                             <h2
-                              className="study-heading font-black"
+                              dir={studyDir}
+                              className={`study-heading font-black ${
+                                isLtr ? 'text-left' : 'text-right'
+                              }`}
                               style={{
                                 fontFamily: resolvedHeadingFontCss,
                                 fontSize: `${headingFontSize}px`,
                                 color: monochromePrintMode ? '#000000' : studyModColor,
-                                fontWeight: settings.headingBold ? 900 : 700,
+                                fontWeight: settings.headingBold ? 900 : 800,
+                                direction: studyDir,
+                                textAlign: isLtr ? 'left' : 'right',
                               }}
                             >
-                              {study.titleAndTechnique || `گزارش ${modalityNames[study.modality]}`}
+                              {study.titleAndTechnique ||
+                                (isLtr
+                                  ? `${study.modality.toUpperCase()} Study Report`
+                                  : `گزارش ${modalityNames[study.modality]}`)}
                               {slice.isContinuation && (
                                 <span
-                                  className="text-xs font-bold mr-2"
+                                  className={`text-xs font-bold ${isLtr ? 'ml-2' : 'mr-2'}`}
                                   style={{ color: studyModColor }}
                                 >
-                                  (ادامه در برگه {sheet.pageNumber})
+                                  {isLtr
+                                    ? `(Continued on page ${sheet.pageNumber})`
+                                    : `(ادامه در برگه ${sheet.pageNumber})`}
                                 </span>
                               )}
                             </h2>
@@ -1108,28 +1593,39 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                           {/* Comparison */}
                           {slice.showComparisonSlice && study.comparison && (
                             <div
+                              dir={studyDir}
                               className="mb-2.5 text-xs"
                               style={{
                                 fontFamily: resolvedBodyFontCss,
                                 lineHeight: unifiedLineHeight,
+                                direction: studyDir,
+                                textAlign: isLtr ? 'left' : 'right',
                               }}
                             >
-                              <span className="font-bold text-slate-800">
-                                مقایسه با تصاویر پیشین (Comparison):{' '}
+                              <span className="font-extrabold text-slate-950">
+                                {isLtr
+                                  ? 'Comparison: '
+                                  : 'مقایسه با تصاویر پیشین (Comparison): '}
                               </span>
-                              <span className="text-slate-700">{study.comparison}</span>
+                              <span className="text-slate-900 font-semibold">{study.comparison}</span>
                             </div>
                           )}
 
                           {/* Findings HTML Slice */}
                           {slice.findingsHtmlSlice && (
-                            <div className="mb-3">
+                            <div className="mb-3" dir={studyDir}>
                               <div
-                                className="printable-findings-content prose prose-slate max-w-none text-justify text-slate-800"
+                                dir={studyDir}
+                                className={`printable-findings-content prose max-w-none text-slate-950 font-medium ${
+                                  isLtr ? 'text-left' : 'text-justify'
+                                }`}
                                 style={{
                                   fontFamily: resolvedBodyFontCss,
                                   fontSize: `${bodyFontSize || 14}px`,
                                   lineHeight: unifiedLineHeight,
+                                  color: '#050811',
+                                  direction: studyDir,
+                                  textAlign: isLtr ? 'left' : 'justify',
                                 }}
                                 dangerouslySetInnerHTML={{
                                   __html: stripSpellHighlights(slice.findingsHtmlSlice, true),
@@ -1141,29 +1637,44 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                           {/* Impression */}
                           {slice.showImpressionSlice && study.impressionHtml && (
                             <div
-                              className="impression-box mb-3 p-3 rounded-xl border-2 bg-slate-50/70 text-xs"
+                              dir={studyDir}
+                              className="impression-box mb-3 p-3 rounded-xl border-2 bg-slate-50/85 text-xs"
                               style={{
                                 borderColor: monochromePrintMode ? '#000000' : studyModColor,
                                 lineHeight: unifiedLineHeight,
+                                direction: studyDir,
+                                textAlign: isLtr ? 'left' : 'right',
                               }}
                             >
                               <div
+                                dir={studyDir}
                                 className="study-heading font-black text-sm mb-1 flex items-center gap-1.5"
                                 style={{
                                   fontFamily: resolvedHeadingFontCss,
                                   fontSize: `${Math.max(13, headingFontSize - 1)}px`,
                                   color: monochromePrintMode ? '#000000' : studyModColor,
+                                  direction: studyDir,
                                 }}
                               >
                                 <ShieldCheck className="w-4 h-4 shrink-0" />
-                                <span>نتیجه‌گیری نهایی (Impression):</span>
+                                <span>
+                                  {isLtr
+                                    ? 'IMPRESSION:'
+                                    : 'نتیجه‌گیری نهایی (Impression):'}
+                                </span>
                               </div>
                               <div
-                                className="printable-findings-content prose prose-slate max-w-none text-slate-900 font-medium"
+                                dir={studyDir}
+                                className={`printable-findings-content prose max-w-none text-slate-950 font-semibold ${
+                                  isLtr ? 'text-left' : 'text-right'
+                                }`}
                                 style={{
                                   fontFamily: resolvedBodyFontCss,
                                   fontSize: `${bodyFontSize || 14}px`,
                                   lineHeight: unifiedLineHeight,
+                                  color: '#050811',
+                                  direction: studyDir,
+                                  textAlign: isLtr ? 'left' : 'right',
                                 }}
                                 dangerouslySetInnerHTML={{
                                   __html: stripSpellHighlights(study.impressionHtml, true),
@@ -1175,17 +1686,23 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                           {/* Recommendations */}
                           {slice.showRecommendationsSlice && study.recommendationsHtml && (
                             <div
-                              className="mb-2 text-xs p-2.5 bg-slate-50 rounded-xl border border-slate-200"
+                              dir={studyDir}
+                              className="mb-2 text-xs p-2.5 bg-slate-50 rounded-xl border border-slate-300"
                               style={{
                                 fontFamily: resolvedBodyFontCss,
                                 lineHeight: unifiedLineHeight,
+                                direction: studyDir,
+                                textAlign: isLtr ? 'left' : 'right',
                               }}
                             >
-                              <span className="font-bold text-slate-800">
-                                توصیه‌ها (Recommendations):{' '}
+                              <span className="font-extrabold text-slate-950">
+                                {isLtr
+                                  ? 'Recommendations: '
+                                  : 'توصیه‌ها (Recommendations): '}
                               </span>
                               <div
-                                className="printable-findings-content inline prose prose-slate"
+                                dir={studyDir}
+                                className="printable-findings-content inline prose text-slate-950 font-medium"
                                 dangerouslySetInnerHTML={{
                                   __html: stripSpellHighlights(study.recommendationsHtml, true),
                                 }}
@@ -1197,12 +1714,12 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                     })}
                   </div>
 
-                  {/* BOTTOM SECTION (mt-auto): Pinned Footer at the Very Bottom of the A4 Paper */}
+                  {/* BOTTOM SECTION (mt-auto): Pinned Footer at the Very Bottom of the A4 Paper (Uses <div> instead of <footer> so browser/PDF print rules never hide it) */}
                   {!preprintedLetterheadMode && (
-                    <footer
-                      className="a4-pinned-footer mt-auto pt-3.5 border-t-2 shrink-0 flex items-end justify-between break-inside-avoid w-full"
+                    <div
+                      className="a4-pinned-footer relative z-10 mt-auto pt-3.5 border-t-2 shrink-0 flex items-end justify-between break-inside-avoid w-full"
                       style={{
-                        borderColor: monochromePrintMode ? '#000000' : `${activeModalityColor}55`,
+                        borderColor: monochromePrintMode ? '#000000' : `${activeModalityColor}77`,
                       }}
                     >
                       {/* Verification QR Code */}
@@ -1229,19 +1746,19 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                             <QrCode className="w-8 h-8 text-slate-400" />
                           </div>
                         )}
-                        <div className="text-[10px] text-slate-600 space-y-0.5">
-                          <div className="flex items-center gap-1 font-mono font-bold text-slate-900">
+                        <div className="text-[10px] text-slate-800 space-y-0.5">
+                          <div className="flex items-center gap-1 font-mono font-extrabold text-slate-950">
                             <span>
                               کد اصالت‌سنجی: {patientInfo.nationalId || patientInfo.admissionNumber || '88412'}-PAC
                             </span>
                           </div>
-                          <p className="text-[9.5px] text-slate-600">
+                          <p className="text-[9.5px] font-semibold text-slate-800">
                             {qrMode === 'url'
                               ? 'اسکن بارکد با دوربین موبایل جهت باز شدن گواهی رسمی اصالت گزارش'
                               : 'اسکن بارکد با دوربین موبایل جهت مشاهده کارت مشخصات تاییدشده گزارش'}
                           </p>
                           <p
-                            className="text-[9px] font-bold"
+                            className="text-[9.5px] font-extrabold"
                             style={{ color: monochromePrintMode ? '#000000' : activeModalityColor }}
                           >
                             {clinicNameDisplay}
@@ -1249,23 +1766,34 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                         </div>
                       </div>
 
-                      {/* Radiologist Stamp & Independent Signature per Doctor */}
+                      {/* Radiologist Stamp & Independent Signature per Doctor (Respects doctor.stampFont & doctor.stampFontSize) */}
                       <div
-                        className="text-center px-4 py-2.5 rounded-xl border-2 border-dashed min-w-[215px] bg-slate-50/40"
+                        className="doctor-stamp-box text-center px-4 py-2.5 rounded-xl border-2 border-dashed min-w-[215px] bg-slate-50/60"
                         style={{
                           borderColor: monochromePrintMode ? '#000000' : activeModalityColor,
+                          fontFamily: resolvedDoctorStampFontCss,
                         }}
                       >
                         <div
-                          className="text-xs font-black"
-                          style={{ color: monochromePrintMode ? '#000000' : activeModalityColor }}
+                          className="font-black"
+                          style={{
+                            color: monochromePrintMode ? '#000000' : activeModalityColor,
+                            fontFamily: resolvedDoctorStampFontCss,
+                            fontSize: `${resolvedDoctorStampFontSize}px`,
+                          }}
                         >
                           {doctor.name}
                         </div>
-                        <div className="text-[11px] font-medium text-slate-700 mt-0.5">
+                        <div
+                          className="font-bold text-slate-900 mt-0.5"
+                          style={{
+                            fontFamily: resolvedDoctorStampFontCss,
+                            fontSize: `${Math.max(10, resolvedDoctorStampFontSize - 2)}px`,
+                          }}
+                        >
                           {doctor.specialty}
                         </div>
-                        <div className="text-[10px] font-mono text-slate-500 mt-0.5">
+                        <div className="text-[10px] font-mono font-bold text-slate-800 mt-0.5">
                           شماره نظام پزشکی: {doctor.medicalCouncilId}
                         </div>
                         {effectiveSignatureUrl && (
@@ -1278,7 +1806,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                           </div>
                         )}
                       </div>
-                    </footer>
+                    </div>
                   )}
                 </div>
               </div>
