@@ -34,7 +34,8 @@
 }
 
 /* ==========================================================================
-   2. Un-split Local Vazirmatn Font (Prevents broken/disconnected Persian glyphs)
+   2. Un-split Local Vazirmatn & Persian Medical/Stamp Fonts (100% Offline)
+      Covering weights 100-900 so bold/black stamp headers never fall back!
    ========================================================================== */
 @font-face {
   font-family: 'Vazirmatn';
@@ -51,6 +52,159 @@
   font-display: block;
   src: url('/fonts/Vazirmatn-Bold.woff2') format('woff2');
 }
+
+@font-face {
+  font-family: 'Lalezar';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: block;
+  src: local('Lalezar'), url('/fonts/Lalezar-Regular.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'B Titr';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: block;
+  src: local('B Titr'), local('BTitrBold'), url('/fonts/Lalezar-Regular.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Amiri';
+  font-style: normal;
+  font-weight: 100 500;
+  font-display: block;
+  src: local('Amiri'), url('/fonts/Amiri-Regular.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Amiri';
+  font-style: normal;
+  font-weight: 600 900;
+  font-display: block;
+  src: local('Amiri Bold'), url('/fonts/Amiri-Bold.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'B Nazanin';
+  font-style: normal;
+  font-weight: 100 500;
+  font-display: block;
+  src: local('B Nazanin'), local('BNazanin'), url('/fonts/Parastoo-Regular.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'B Nazanin';
+  font-style: normal;
+  font-weight: 600 900;
+  font-display: block;
+  src: local('B Nazanin Bold'), local('BNazaninBold'), url('/fonts/Parastoo-Bold.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Parastoo';
+  font-style: normal;
+  font-weight: 100 500;
+  font-display: block;
+  src: local('Parastoo'), url('/fonts/Parastoo-Regular.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Parastoo';
+  font-style: normal;
+  font-weight: 600 900;
+  font-display: block;
+  src: local('Parastoo Bold'), url('/fonts/Parastoo-Bold.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Tanha';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: block;
+  src: local('Tanha'), url('/fonts/Tanha.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'IranNastaliq';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: block;
+  src: local('IranNastaliq'), local('Iran Nastaliq'), url('/fonts/Amiri-Bold.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Noto Naskh Arabic';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: block;
+  src: local('Noto Naskh Arabic'), url('/fonts/NotoNaskhArabic-Bold.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Markazi Text';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: block;
+  src: local('Markazi Text'), url('/fonts/MarkaziText-Bold.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Readex Pro';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: block;
+  src: local('Readex Pro'), url('/fonts/ReadexPro-Bold.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Sahel';
+  font-style: normal;
+  font-weight: 100 500;
+  font-display: block;
+  src: local('Sahel'), url('/fonts/Sahel.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Sahel';
+  font-style: normal;
+  font-weight: 600 900;
+  font-display: block;
+  src: local('Sahel Bold'), url('/fonts/Sahel-Bold.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Shabnam';
+  font-style: normal;
+  font-weight: 100 500;
+  font-display: block;
+  src: local('Shabnam'), url('/fonts/Shabnam.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Shabnam';
+  font-style: normal;
+  font-weight: 600 900;
+  font-display: block;
+  src: local('Shabnam Bold'), url('/fonts/Shabnam-Bold.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Samim';
+  font-style: normal;
+  font-weight: 100 500;
+  font-display: block;
+  src: local('Samim'), url('/fonts/Samim.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Samim';
+  font-style: normal;
+  font-weight: 600 900;
+  font-display: block;
+  src: local('Samim Bold'), url('/fonts/Samim-Bold.woff2') format('woff2');
+}
+
 
 :root {
   --modality-accent: #0284c7;
@@ -104,12 +258,10 @@
 
 @keyframes tabCrossfade {
   0% {
-    opacity: 0.35;
-    transform: translateY(6px) scale(0.996);
+    opacity: 0.45;
   }
   100% {
     opacity: 1;
-    transform: none;
   }
 }
 
@@ -126,19 +278,19 @@
 }
 
 .animate-fadeIn {
-  animation: fadeIn 240ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation: fadeIn 240ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .animate-scaleIn {
-  animation: scaleIn 250ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation: scaleIn 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .animate-slideLeft {
-  animation: slideLeft 280ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation: slideLeft 280ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .animate-tabSwitch {
-  animation: tabCrossfade 260ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation: tabCrossfade 220ms ease-out;
 }
 
 .animate-modalityPulse {
@@ -578,6 +730,16 @@ span.rad-slot.active-rad-slot {
 .printable-header-section strong {
   font-family: inherit !important;
   letter-spacing: 0px !important;
+}
+
+.doctor-stamp-box {
+  font-family: var(--stamp-font-family, 'Vazirmatn', sans-serif) !important;
+}
+
+.doctor-stamp-box div:not(.font-mono),
+.doctor-stamp-box span:not(.font-mono),
+.doctor-stamp-box p:not(.font-mono) {
+  font-family: inherit !important;
 }
 
 .printable-findings-content {

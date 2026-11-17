@@ -1,4 +1,5 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { Modality, MedicalShortcut, PatientInfo, ReportStudy, MedicalTemplate, MedicalReport, ReportRevision } from '../types';
 import { STANDARD_ORGAN_DEFINITIONS } from '../data/defaultShortcuts';
 import {
@@ -54,6 +55,8 @@ import {
   fixStudyLateralityMismatch,
   cleanMedicalTextWhitespaceAndDuplicates,
   paginateStudiesIntoA4Pages,
+  fixRtlUnitPlaceholderBidi,
+  fixRtlUnitPlaceholdersInDom,
 } from '../services/typistUtils';
 
 interface RichMedicalEditorProps {
@@ -221,12 +224,10 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
     return () => document.removeEventListener('mousedown', handleOutsideOrganClick);
   }, [openOrganMenuKey]);
 
-  const buildOrganParagraphHtml = (organLabel: string, rawText: string) => {
-    const clean = rawText.trim();
+  const buildOrganParagraphHtml = (rawText: string) => {
+    const clean = fixRtlUnitPlaceholderBidi(rawText.trim());
     if (clean.startsWith('<p')) return clean;
-    const prefixRegex = new RegExp(`^${organLabel}[^:]*:\\s*`);
-    const bodyOnly = clean.replace(prefixRegex, '');
-    return `<p><strong>${organLabel}:</strong> ${bodyOnly}</p>`;
+    return `<p>${clean}</p>`;
   };
 
   const handleApplyOrganShortcut = (
@@ -236,58 +237,147 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
   ) => {
     if (isReportLocked) return;
     const currentHtml = stripSpellHighlights(study.findingsHtml || '');
-    const pRegex = /<p[^>]*>[\s\S]*?<\/p>/gi;
-    const matches = currentHtml.match(pRegex);
-    const targetParagraphHtml = buildOrganParagraphHtml(organGroup.organ, sc.expansion);
+    const cleanExpansion = fixRtlUnitPlaceholderBidi(sc.expansion.trim());
+    const targetParagraphHtml = buildOrganParagraphHtml(cleanExpansion);
 
+    const normalizeForMatch = (s: string) =>
+      s
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/ي/g, 'ی')
+        .replace(/ك/g, 'ک')
+        .replace(/[\u200c\u200e\u200f]/g, ' ')
+        .replace(/[.:،,;؛\-–—()]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+
+    // 1. Collect user-defined normal & pathology sentences for this organ (normal sentences first)
+    const sortedSiblingItems = [...organGroup.items].sort((a, b) => {
+      if (a.category === 'normal' && b.category !== 'normal') return -1;
+      if (a.category !== 'normal' && b.category === 'normal') return 1;
+      return b.expansion.length - a.expansion.length;
+    });
+
+    const siblingNormSentences = sortedSiblingItems
+      .map((item) => ({
+        rawPlain: item.expansion.replace(/<[^>]+>/g, '').trim(),
+        norm: normalizeForMatch(item.expansion),
+        isNormal: item.category === 'normal',
+      }))
+      .filter((x) => x.norm.length >= 4);
+
+    // Check if an exact user-defined normal/organ sentence appears inside the HTML (even mid-paragraph)
     let replaced = false;
-    let updatedHtml = '';
+    let updatedHtml = currentHtml;
+
+    for (const sib of siblingNormSentences) {
+      if (!sib.rawPlain) continue;
+      const escapedPlain = sib.rawPlain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const optionalPrefixPattern = `(?:<strong[^>]*>\\s*${organGroup.organ.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^<]*<\\/strong>\\s*[:：]?\\s*|${organGroup.organ.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*[:：]\\s*)?`;
+      const exactSentenceRegex = new RegExp(`${optionalPrefixPattern}${escapedPlain}`, 'i');
+      if (exactSentenceRegex.test(updatedHtml)) {
+        updatedHtml = updatedHtml.replace(exactSentenceRegex, cleanExpansion);
+        replaced = true;
+        break;
+      }
+    }
 
     const matchesOrganParagraph = (blockHtml: string) => {
       const plain = blockHtml.replace(/<[^>]+>/g, '').trim();
-      const headSlice = plain.slice(0, 42);
-      return organGroup.matchKeywords.some(
-        (kw) =>
-          headSlice.startsWith(kw) ||
-          headSlice.includes(`${kw}:`) ||
-          headSlice.includes(`${kw} ها:`) ||
-          headSlice.includes(`${kw}‌ها:`) ||
-          new RegExp(`<strong[^>]*>[^<]*${kw}`, 'i').test(blockHtml)
-      );
+      if (!plain) return false;
+      const normBlock = normalizeForMatch(plain);
+
+      // a) Direct match against any defined normal/pathology shortcut sentence for this organ
+      for (const sib of siblingNormSentences) {
+        if (
+          normBlock === sib.norm ||
+          normBlock.includes(sib.norm) ||
+          (sib.norm.length > 12 && sib.norm.includes(normBlock) && normBlock.length > 10)
+        ) {
+          return true;
+        }
+        // Fuzzy token overlap with user's defined 'normal' sentence for this organ
+        if (sib.isNormal) {
+          const sibTokens = sib.norm.split(' ').filter((w) => w.length >= 2);
+          if (sibTokens.length >= 3) {
+            const matchedCount = sibTokens.filter((w) => normBlock.includes(w)).length;
+            if (matchedCount / sibTokens.length >= 0.65) {
+              return true;
+            }
+          }
+        }
+      }
+
+      // b) Keyword match anywhere in the line/paragraph
+      return organGroup.matchKeywords.some((kw) => {
+        const normKw = normalizeForMatch(kw);
+        return (
+          normKw.length > 0 &&
+          (normBlock.startsWith(normKw) ||
+            normBlock.includes(` ${normKw} `) ||
+            normBlock.endsWith(` ${normKw}`) ||
+            plain.includes(kw))
+        );
+      });
     };
 
-    if (matches && matches.length > 0) {
-      updatedHtml = currentHtml.replace(pRegex, (pBlock) => {
-        if (!replaced && matchesOrganParagraph(pBlock)) {
-          replaced = true;
-          return targetParagraphHtml;
+    if (!replaced) {
+      // Split paragraphs that contain <br> into individual lines first so we only replace the organ's own line
+      const tempDiv = document.createElement('div');
+      tempDiv.innerHTML = currentHtml;
+
+      const candidateEls = Array.from(tempDiv.querySelectorAll('p, div, li')).filter(
+        (el) => !el.querySelector('p, div, table, ul, ol')
+      );
+
+      if (candidateEls.length > 0) {
+        for (const elNode of candidateEls) {
+          if (replaced) break;
+          // If this block has <br>-separated lines, check line by line
+          if (elNode.innerHTML.toLowerCase().includes('<br')) {
+            const subLines = elNode.innerHTML.split(/<br\s*\/?>/i);
+            const newSubLines = subLines.map((sub) => {
+              if (!replaced && matchesOrganParagraph(sub)) {
+                replaced = true;
+                return cleanExpansion;
+              }
+              return sub;
+            });
+            if (replaced) {
+              elNode.innerHTML = newSubLines.join('<br>');
+              break;
+            }
+          } else if (matchesOrganParagraph(elNode.innerHTML)) {
+            elNode.innerHTML = cleanExpansion;
+            replaced = true;
+            break;
+          }
         }
-        return pBlock;
-      });
-      if (!replaced) {
-        updatedHtml = `${currentHtml}${targetParagraphHtml}`;
-      }
-    } else {
-      const lines = currentHtml
-        .split(/<br\s*\/?>|\n/i)
-        .map((l) => l.trim())
-        .filter(Boolean);
-      const updatedLines = lines.map((line) => {
-        if (!replaced && matchesOrganParagraph(line)) {
-          replaced = true;
-          return targetParagraphHtml;
+        updatedHtml = replaced ? tempDiv.innerHTML : `${currentHtml}${targetParagraphHtml}`;
+      } else {
+        const lines = currentHtml
+          .split(/<br\s*\/?>|\n/i)
+          .map((l) => l.trim())
+          .filter(Boolean);
+        const updatedLines = lines.map((line) => {
+          if (!replaced && matchesOrganParagraph(line)) {
+            replaced = true;
+            return targetParagraphHtml;
+          }
+          return line.startsWith('<p') ? line : `<p>${line}</p>`;
+        });
+        if (!replaced) {
+          updatedLines.push(targetParagraphHtml);
         }
-        return line.startsWith('<p') ? line : `<p>${line}</p>`;
-      });
-      if (!replaced) {
-        updatedLines.push(targetParagraphHtml);
+        updatedHtml = updatedLines.join('');
       }
-      updatedHtml = updatedLines.join('');
     }
 
     const el = findingsRefs.current[study.id];
     if (el) {
       el.innerHTML = updatedHtml;
+      fixRtlUnitPlaceholdersInDom(el);
+      updatedHtml = el.innerHTML;
     }
     onUpdateStudy(study.id, { findingsHtml: updatedHtml });
     setOpenOrganMenuKey(null);
@@ -411,7 +501,7 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
       const el = findingsRefs.current[study.id];
       if (el && el.innerHTML !== study.findingsHtml) {
         if (document.activeElement !== el) {
-          el.innerHTML = study.findingsHtml;
+          el.innerHTML = fixRtlUnitPlaceholderBidi(study.findingsHtml);
         }
       }
     });
@@ -914,6 +1004,9 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
     const el = findingsRefs.current[study.id];
     if (!el) return;
 
+    // Keep -mm, --mm, -cm, -cc hyphen on the left of English units in Persian RTL mode
+    fixRtlUnitPlaceholdersInDom(el);
+
     detectPendingShortcut(el);
 
     const html = el.innerHTML;
@@ -1044,38 +1137,55 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
         return;
       }
       const range = sel.getRangeAt(0);
-      const rect = range.getBoundingClientRect();
+      const clientRects = Array.from(range.getClientRects()).filter(
+        (r) => r.width > 0 && r.height > 0
+      );
+      const rect = clientRects.length > 0 ? clientRects[0] : range.getBoundingClientRect();
       if (rect.width === 0 && rect.height === 0) {
         setFloatingToolbarPos(null);
         return;
       }
 
       const viewportW = document.documentElement.clientWidth || window.innerWidth;
+      const viewportH = document.documentElement.clientHeight || window.innerHeight;
       const editorRect = activeEl.getBoundingClientRect();
-      const toolbarW = floatingToolbarRef.current?.offsetWidth || 450;
-      const toolbarH = floatingToolbarRef.current?.offsetHeight || 38;
 
-      // Keep toolbar strictly inside both the viewport and the active editor horizontal boundaries
-      const idealLeft = rect.left + rect.width / 2 - toolbarW / 2;
-      const minLeft = Math.max(12, editorRect.left + 8);
-      const maxLeft = Math.min(
-        viewportW - toolbarW - 12,
-        Math.max(minLeft, editorRect.right - toolbarW - 8)
-      );
-      const left = Math.max(12, Math.min(maxLeft, Math.max(minLeft, idealLeft)));
-
-      // Prevent toolbar from hiding under top sticky bars when selecting the first line
+      // Hide toolbar if selection itself is scrolled out of the visible viewport
       const quickbarBottom =
         document.getElementById('app-editor-quickbar')?.getBoundingClientRect().bottom || 0;
       const tabsbarBottom =
         document.getElementById('app-patient-tabs-bar')?.getBoundingClientRect().bottom || 0;
       const navbarBottom =
         document.getElementById('app-main-navbar')?.getBoundingClientRect().bottom || 0;
-      const minAllowedTop = Math.max(quickbarBottom, tabsbarBottom, navbarBottom, 12) + 6;
+      const minAllowedTop = Math.max(quickbarBottom, tabsbarBottom, navbarBottom, 8) + 4;
 
-      let top = rect.top - toolbarH - 8;
+      if (rect.bottom < minAllowedTop || rect.top > viewportH - 24) {
+        setFloatingToolbarPos(null);
+        return;
+      }
+
+      const maxAllowedWidth = Math.max(220, Math.min(viewportW - 16, editorRect.width - 12));
+      const toolbarW = Math.min(
+        floatingToolbarRef.current?.offsetWidth || 380,
+        maxAllowedWidth
+      );
+      const toolbarH = floatingToolbarRef.current?.offsetHeight || 34;
+
+      // Clamp strictly within the active editor box horizontally
+      const minLeft = Math.max(8, editorRect.left + 6);
+      const maxLeft = Math.min(
+        viewportW - toolbarW - 8,
+        Math.max(minLeft, editorRect.right - toolbarW - 6)
+      );
+      const idealLeft = rect.left + rect.width / 2 - toolbarW / 2;
+      const left = Math.round(Math.max(minLeft, Math.min(maxLeft, idealLeft)));
+
+      // Position tightly (4px) above the selected line; flip below only if blocked by sticky top bar
+      let top = Math.round(rect.top - toolbarH - 4);
       if (top < minAllowedTop) {
-        top = rect.bottom + 8;
+        const lastRect =
+          clientRects.length > 0 ? clientRects[clientRects.length - 1] : rect;
+        top = Math.round(lastRect.bottom + 4);
       }
 
       setFloatingToolbarPos({ top, left });
@@ -1091,26 +1201,28 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
     };
   }, [activeStudyId]);
 
-  // Post-render exact pixel boundary check so the floating toolbar never overflows on the first frame
+  // Post-render exact pixel boundary check so the floating toolbar never overflows the editor box
   useEffect(() => {
     if (!floatingToolbarPos || !floatingToolbarRef.current) return;
     const el = floatingToolbarRef.current;
     const r = el.getBoundingClientRect();
     const viewportW = document.documentElement.clientWidth || window.innerWidth;
     const activeEl = findingsRefs.current[activeStudyId];
-    const editorRight = activeEl
-      ? Math.min(viewportW - 12, activeEl.getBoundingClientRect().right - 8)
-      : viewportW - 12;
+    const editorRect = activeEl ? activeEl.getBoundingClientRect() : null;
+    const minLeft = editorRect ? Math.max(8, editorRect.left + 6) : 8;
+    const maxRight = editorRect
+      ? Math.min(viewportW - 8, editorRect.right - 6)
+      : viewportW - 8;
 
     let adjustedLeft = floatingToolbarPos.left;
-    if (r.right > editorRight) {
-      adjustedLeft -= r.right - editorRight;
+    if (r.right > maxRight) {
+      adjustedLeft -= r.right - maxRight;
     }
-    if (adjustedLeft < 12) {
-      adjustedLeft = 12;
+    if (adjustedLeft < minLeft) {
+      adjustedLeft = minLeft;
     }
     if (Math.abs(adjustedLeft - floatingToolbarPos.left) > 1) {
-      setFloatingToolbarPos((prev) => (prev ? { ...prev, left: adjustedLeft } : null));
+      setFloatingToolbarPos((prev) => (prev ? { ...prev, left: Math.round(adjustedLeft) } : null));
     }
   }, [floatingToolbarPos, activeStudyId]);
 
@@ -1780,26 +1892,32 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
         )}
       </div>
 
-      {/* Compact Floating Selection Formatting Toolbar (نوار ابزار شناور فشرده بالای متن انتخابی) */}
-      {floatingToolbarPos && (
-        <div
-          ref={floatingToolbarRef}
-          dir="rtl"
-          style={{
-            position: 'fixed',
-            top: `${floatingToolbarPos.top}px`,
-            left: `${floatingToolbarPos.left}px`,
-            right: 'auto',
-            zIndex: 90,
-          }}
-          onMouseEnter={() => {
-            isInteractingWithFloatingRef.current = true;
-          }}
-          onMouseLeave={() => {
-            isInteractingWithFloatingRef.current = false;
-          }}
-          className="bg-slate-900/95 backdrop-blur-md text-white px-2 py-1 rounded-xl shadow-2xl border border-slate-700/90 flex items-center gap-1 whitespace-nowrap max-w-[calc(100vw-24px)] overflow-x-auto no-scrollbar animate-scaleIn no-print"
-        >
+      {/* Compact Floating Selection Formatting Toolbar (Rendered in document.body portal so parent transforms/scroll never offset it) */}
+      {floatingToolbarPos &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            ref={floatingToolbarRef}
+            dir="rtl"
+            style={{
+              position: 'fixed',
+              top: `${floatingToolbarPos.top}px`,
+              left: `${floatingToolbarPos.left}px`,
+              right: 'auto',
+              maxWidth: `${Math.max(
+                240,
+                (findingsRefs.current[activeStudyId]?.getBoundingClientRect().width || window.innerWidth) - 12
+              )}px`,
+              zIndex: 9999,
+            }}
+            onMouseEnter={() => {
+              isInteractingWithFloatingRef.current = true;
+            }}
+            onMouseLeave={() => {
+              isInteractingWithFloatingRef.current = false;
+            }}
+            className="bg-slate-900/95 backdrop-blur-md text-white px-2 py-1 rounded-xl shadow-2xl border border-slate-700/90 flex items-center gap-1 whitespace-nowrap overflow-x-auto no-scrollbar no-print"
+          >
           {/* ۱. انتخاب قلم (Font Family - فشرده) */}
           <select
             value={floatingFontName}
@@ -1959,8 +2077,9 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
           >
             <Eraser className="w-3.5 h-3.5" />
           </button>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
 
       {/* Main Grid: Supports Standard View (9+3), Zen Full-Width View (12), or Split-Screen Comparison View (7+5) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 2xl:gap-7">

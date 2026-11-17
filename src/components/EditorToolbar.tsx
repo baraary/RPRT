@@ -30,8 +30,11 @@ import {
 
 interface EditorToolbarProps {
   onExecCommand: (command: string, value?: string) => void;
-  onInsertTable: (rows: number, cols: number, withHeader?: boolean) => void;
-  onInsertPresetTable?: (presetId: 'kidneys' | 'thyroid' | 'fetal' | 'pelvis' | 'lesions') => void;
+  onInsertTable: (rows: number, cols: number, withHeader?: boolean, widthStyle?: string) => void;
+  onInsertPresetTable?: (
+    presetId: 'kidneys' | 'thyroid' | 'fetal' | 'pelvis' | 'lesions',
+    widthStyle?: string
+  ) => void;
   onInsertSymbol: (symbol: string) => void;
   onFindReplace: (find: string, replace: string, replaceAll: boolean) => void;
   wordCount: number;
@@ -83,6 +86,7 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
   const [showTableMenu, setShowTableMenu] = useState(false);
   const [hoverGrid, setHoverGrid] = useState<{ r: number; c: number }>({ r: 3, c: 3 });
   const [tableWithHeader, setTableWithHeader] = useState(true);
+  const [tableWidthOption, setTableWidthOption] = useState<'auto' | '50%' | '75%' | '100%'>('auto');
   const [showSymbolMenu, setShowSymbolMenu] = useState(false);
   const [showMoreToolsMenu, setShowMoreToolsMenu] = useState(false);
   const [showColorPicker, setShowColorPicker] = useState(false);
@@ -712,7 +716,43 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
           </button>
 
           {showTableMenu && (
-            <div className="absolute right-0 mt-1.5 w-72 bg-white border border-slate-200 rounded-2xl shadow-2xl p-3 z-50 text-xs space-y-3 animate-fadeIn">
+            <div className="absolute right-0 mt-1.5 w-80 bg-white border border-slate-200 rounded-2xl shadow-2xl p-3 z-50 text-xs space-y-3 animate-fadeIn">
+              {/* Section 0: Table Width / Size Selector & Resize Existing Table */}
+              <div className="p-2 rounded-xl bg-indigo-50/60 border border-indigo-200/80 space-y-1.5">
+                <div className="flex items-center justify-between text-[11px] font-black text-indigo-950">
+                  <span>اندازه / عرض جدول (درج یا تغییر سایز):</span>
+                  <span className="text-[10px] font-mono text-indigo-700 bg-white px-1.5 py-0.5 rounded border border-indigo-200">
+                    {tableWidthOption === 'auto' ? 'فشرده' : tableWidthOption}
+                  </span>
+                </div>
+                <div className="grid grid-cols-4 gap-1">
+                  {[
+                    { val: 'auto' as const, label: 'فشرده' },
+                    { val: '50%' as const, label: 'کوچک ۵۰٪' },
+                    { val: '75%' as const, label: 'متوسط ۷۵٪' },
+                    { val: '100%' as const, label: 'کامل ۱۰۰٪' },
+                  ].map((opt) => (
+                    <button
+                      key={opt.val}
+                      type="button"
+                      onMouseDown={preventFocusLoss}
+                      onClick={() => {
+                        setTableWidthOption(opt.val);
+                        onExecCommand('resizeTable', opt.val);
+                      }}
+                      className={`py-1 px-1 rounded-lg font-bold text-[10.5px] border transition-all cursor-pointer ${
+                        tableWidthOption === opt.val
+                          ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
+                          : 'bg-white hover:bg-indigo-50 text-slate-700 border-slate-200'
+                      }`}
+                      title={`تنظیم عرض جدول جدید و تغییر سایز جدول فعلی به ${opt.label}`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               {/* Section 1: Pre-built Radiology Tables with Smart Number Slots */}
               <div>
                 <div className="font-black text-slate-800 mb-1.5 pb-1 border-b border-slate-100 flex items-center justify-between">
@@ -732,9 +772,9 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
                       type="button"
                       onClick={() => {
                         if (onInsertPresetTable) {
-                          onInsertPresetTable(preset.id);
+                          onInsertPresetTable(preset.id, tableWidthOption);
                         } else {
-                          onInsertTable(3, 4, true);
+                          onInsertTable(3, 4, true, tableWidthOption);
                         }
                         setShowTableMenu(false);
                       }}
@@ -771,7 +811,7 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
                           type="button"
                           onMouseEnter={() => setHoverGrid({ r, c })}
                           onClick={() => {
-                            onInsertTable(r, c, tableWithHeader);
+                            onInsertTable(r, c, tableWithHeader, tableWidthOption);
                             setShowTableMenu(false);
                           }}
                           className={`w-7 h-6 rounded border transition-all cursor-pointer ${

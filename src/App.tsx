@@ -51,6 +51,7 @@ import {
   detectGenderFromPersianName,
   sanitizeHtmlForPatientGender,
   incrementAdmissionNumber,
+  fixRtlUnitPlaceholderBidi,
 } from './services/typistUtils';
 
 function getDefaultModalityDirection(
@@ -1283,6 +1284,37 @@ export default function App() {
       applyDirectionOrAlignmentToSelection(editorEl, { type: 'align', align: 'left' });
     } else if (command === 'justifyFull' && editorEl) {
       applyDirectionOrAlignmentToSelection(editorEl, { type: 'align', align: 'justify' });
+    } else if (command === 'resizeTable' && value && editorEl) {
+      const sel = window.getSelection();
+      let targetTable: HTMLTableElement | null = null;
+      if (sel && sel.rangeCount > 0) {
+        const node = sel.anchorNode;
+        const el =
+          node?.nodeType === Node.ELEMENT_NODE
+            ? (node as HTMLElement)
+            : node?.parentElement || null;
+        if (el && editorEl.contains(el)) {
+          targetTable = el.closest('table');
+        }
+      }
+      const tables = targetTable
+        ? [targetTable]
+        : Array.from(editorEl.querySelectorAll<HTMLTableElement>('table'));
+      if (tables.length > 0) {
+        for (const tbl of tables) {
+          tbl.setAttribute('data-table-width', value);
+          if (value === 'auto') {
+            tbl.style.width = 'auto';
+            tbl.style.maxWidth = '100%';
+          } else {
+            tbl.style.width = value;
+            tbl.style.maxWidth = '100%';
+          }
+        }
+        showToast(
+          `عرض جدول به «${value === 'auto' ? 'فشرده متناسب با متن' : value}» تغییر یافت.`
+        );
+      }
     } else if (command === 'hiliteColor' && value === 'transparent') {
       document.execCommand('hiliteColor', false, 'transparent');
       document.execCommand('backColor', false, 'transparent');
@@ -1360,12 +1392,19 @@ export default function App() {
     );
   }, [settings.numberSlotsEnabled]);
 
-  const handleInsertTable = (rows: number, cols: number, withHeader = true) => {
-    let tableHtml = `<table style="width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; direction: rtl;">`;
+  const handleInsertTable = (
+    rows: number,
+    cols: number,
+    withHeader = true,
+    widthStyle: string = 'auto'
+  ) => {
+    const cssWidth =
+      widthStyle === 'auto' ? 'width: auto; max-width: 100%;' : `width: ${widthStyle}; max-width: 100%;`;
+    let tableHtml = `<table data-table-width="${widthStyle}" style="${cssWidth} border-collapse: collapse; margin: 10px 0; font-size: 13px; direction: rtl;">`;
     if (withHeader) {
       tableHtml += `<thead><tr style="background-color: #f0fdfa;">`;
       for (let c = 0; c < cols; c++) {
-        tableHtml += `<th style="padding: 8px 10px; text-align: center; border: 1px solid #99f6e4; color: #0f766e; font-weight: 800;">ستون ${c + 1}</th>`;
+        tableHtml += `<th style="padding: 6px 10px; text-align: center; border: 1px solid #99f6e4; color: #0f766e; font-weight: 800;">ستون ${c + 1}</th>`;
       }
       tableHtml += `</tr></thead>`;
     }
@@ -1376,7 +1415,7 @@ export default function App() {
         const cellContent = settings.numberSlotsEnabled
           ? createSlotHtml(`ردیف ${r + 1} ستون ${c + 1}`, '---')
           : '---';
-        tableHtml += `<td style="padding: 7px 10px; border: 1px solid #cbd5e1; text-align: center;">${cellContent}</td>`;
+        tableHtml += `<td style="padding: 6px 10px; border: 1px solid #cbd5e1; text-align: center;">${cellContent}</td>`;
       }
       tableHtml += `</tr>`;
     }
@@ -1390,11 +1429,16 @@ export default function App() {
         handleUpdateStudy(activeId, { findingsHtml: activeEditorRef.current.innerHTML });
       }
     }
-    showToast(`جدول ${rows}×${cols} در گزارش درج شد.`);
+    showToast(
+      `جدول ${rows}×${cols} (${widthStyle === 'auto' ? 'فشرده' : widthStyle}) در گزارش درج شد.`
+    );
   };
 
-  const handleInsertPresetTable = (presetId: 'kidneys' | 'thyroid' | 'fetal' | 'pelvis' | 'lesions') => {
-    const rawTableHtml = getRadiologyTablePresetHtml(presetId);
+  const handleInsertPresetTable = (
+    presetId: 'kidneys' | 'thyroid' | 'fetal' | 'pelvis' | 'lesions',
+    widthStyle: string = 'auto'
+  ) => {
+    const rawTableHtml = getRadiologyTablePresetHtml(presetId, widthStyle);
     const tableHtml = settings.numberSlotsEnabled
       ? rawTableHtml
       : stripSpellHighlights(rawTableHtml, true);
@@ -1460,9 +1504,10 @@ export default function App() {
     const updatedTemplates = StorageService.incrementTemplateUsage(template.id);
     setTemplates(updatedTemplates);
 
+    const rawFindings = fixRtlUnitPlaceholderBidi(template.findingsHtml);
     const processedFindings = settings.numberSlotsEnabled
-      ? autoWrapNumbersAsSlotsInHtml(template.findingsHtml).updatedHtml
-      : stripSpellHighlights(template.findingsHtml, true);
+      ? autoWrapNumbersAsSlotsInHtml(rawFindings).updatedHtml
+      : stripSpellHighlights(rawFindings, true);
 
     setStudies((prev) => {
       const targetIndex = prev.findIndex((s) => s.id === targetStudyIdForTemplate);
@@ -1508,9 +1553,10 @@ export default function App() {
     const updatedTemplates = StorageService.incrementTemplateUsage(template.id);
     setTemplates(updatedTemplates);
 
+    const rawFindings = fixRtlUnitPlaceholderBidi(template.findingsHtml);
     const processedFindings = settings.numberSlotsEnabled
-      ? autoWrapNumbersAsSlotsInHtml(template.findingsHtml).updatedHtml
-      : stripSpellHighlights(template.findingsHtml, true);
+      ? autoWrapNumbersAsSlotsInHtml(rawFindings).updatedHtml
+      : stripSpellHighlights(rawFindings, true);
     const newStudy: ReportStudy = {
       id: `study-${Date.now()}`,
       modality: template.modality,

@@ -469,14 +469,63 @@ export function autoWrapNumbersAsSlotsInHtml(html: string): {
 }
 
 /**
+ * Fixes Unicode Bidi ordering for hyphen/dash placeholders before English medical units
+ * inside Persian RTL text (e.g., `-mm`, `--mm`, `-cm`, `-cc`, `-ml`, `-gr`) so that
+ * the hyphen `-` stays on the LEFT of `mm` (`-mm`) instead of jumping to the right (`mm-`).
+ */
+export function fixRtlUnitPlaceholderBidi(input: string): string {
+  if (!input) return input;
+  return input.replace(
+    /(?<![\u200E\u200FA-Za-z0-9۰-۹])([-–—_]+\s*(?:mm|cm|cc|ml|mg|gr|kg|bpm|kPa|MHz|Hz|w|d|%)(?![A-Za-z]))/gi,
+    '\u200E$1'
+  );
+}
+
+/**
+ * Applies `fixRtlUnitPlaceholderBidi` directly to text nodes inside a contentEditable element
+ * while keeping the user's exact caret position intact.
+ */
+export function fixRtlUnitPlaceholdersInDom(editorEl: HTMLElement): boolean {
+  const sel = window.getSelection();
+  const anchorNode = sel && sel.rangeCount > 0 ? sel.anchorNode : null;
+  const anchorOffset = sel && sel.rangeCount > 0 ? sel.anchorOffset : 0;
+
+  let modified = false;
+  const walker = document.createTreeWalker(editorEl, NodeFilter.SHOW_TEXT, null);
+  let node = walker.nextNode() as Text | null;
+
+  while (node) {
+    const val = node.nodeValue || '';
+    if (val.includes('-') || val.includes('–') || val.includes('—') || val.includes('_')) {
+      const fixed = fixRtlUnitPlaceholderBidi(val);
+      if (fixed !== val) {
+        modified = true;
+        const delta = fixed.length - val.length;
+        node.nodeValue = fixed;
+        if (sel && node === anchorNode) {
+          try {
+            const nextOffset = Math.min(fixed.length, anchorOffset + delta);
+            sel.collapse(node, nextOffset);
+          } catch {}
+        }
+      }
+    }
+    node = walker.nextNode() as Text | null;
+  }
+
+  return modified;
+}
+
+/**
  * Pre-built Radiology Tables with embedded Smart Number Slots
  */
 export function getRadiologyTablePresetHtml(
-  presetId: 'kidneys' | 'thyroid' | 'fetal' | 'pelvis' | 'lesions'
+  presetId: 'kidneys' | 'thyroid' | 'fetal' | 'pelvis' | 'lesions',
+  widthStyle: string = '100%'
 ): string {
   const ts = Date.now();
-  const baseTableStyle =
-    'width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; text-align: right; direction: rtl;';
+  const resolvedWidth = widthStyle === 'auto' ? 'width: auto; max-width: 100%;' : `width: ${widthStyle};`;
+  const baseTableStyle = `${resolvedWidth} border-collapse: collapse; margin: 12px 0; font-size: 13px; text-align: right; direction: rtl;`;
   const thStyle =
     'padding: 8px 10px; background-color: #f0fdfa; color: #0f766e; border: 1px solid #99f6e4; font-weight: 800; text-align: center;';
   const tdStyle = 'padding: 7px 10px; border: 1px solid #cbd5e1; text-align: center;';

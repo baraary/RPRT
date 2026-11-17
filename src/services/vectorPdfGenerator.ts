@@ -26,6 +26,25 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(binary);
 }
 
+async function fetchValidTtfBuffer(fileName: string): Promise<ArrayBuffer> {
+  const candidates = [`/fonts/${fileName}`, `./fonts/${fileName}`, `fonts/${fileName}`];
+  for (const url of candidates) {
+    try {
+      const res = await fetch(url, { cache: 'no-store' });
+      if (!res.ok) continue;
+      const buf = await res.arrayBuffer();
+      if (buf.byteLength < 10000) continue;
+      const head = new Uint8Array(buf, 0, 4);
+      // Reject HTML fallback responses (starts with '<' = 0x3C)
+      if (head[0] === 0x3c) continue;
+      return buf;
+    } catch {
+      // try next candidate URL
+    }
+  }
+  throw new Error(`Failed to fetch valid TTF font binary: ${fileName}`);
+}
+
 export async function ensureVectorPdfFontsLoaded(): Promise<{ regular: string; bold: string }> {
   if (cachedVazirRegularB64 && cachedVazirBoldB64) {
     return { regular: cachedVazirRegularB64, bold: cachedVazirBoldB64 };
@@ -33,20 +52,39 @@ export async function ensureVectorPdfFontsLoaded(): Promise<{ regular: string; b
   if (fontLoadPromise) return fontLoadPromise;
 
   fontLoadPromise = (async () => {
-    const [regRes, boldRes] = await Promise.all([
-      fetch('/fonts/Vazirmatn-Regular.ttf', { cache: 'force-cache' }),
-      fetch('/fonts/Vazirmatn-Bold.ttf', { cache: 'force-cache' }),
-    ]);
-    if (!regRes.ok || !boldRes.ok) {
-      throw new Error('Failed to load local Vazirmatn TTF fonts for vector PDF');
+    try {
+      const [regBuf, boldBuf] = await Promise.all([
+        fetchValidTtfBuffer('Vazirmatn-Regular.ttf'),
+        fetchValidTtfBuffer('Vazirmatn-Bold.ttf'),
+      ]);
+      cachedVazirRegularB64 = arrayBufferToBase64(regBuf);
+      cachedVazirBoldB64 = arrayBufferToBase64(boldBuf);
+      return { regular: cachedVazirRegularB64, bold: cachedVazirBoldB64 };
+    } catch (err) {
+      fontLoadPromise = null;
+      throw err;
     }
-    const [regBuf, boldBuf] = await Promise.all([regRes.arrayBuffer(), boldRes.arrayBuffer()]);
-    cachedVazirRegularB64 = arrayBufferToBase64(regBuf);
-    cachedVazirBoldB64 = arrayBufferToBase64(boldBuf);
-    return { regular: cachedVazirRegularB64, bold: cachedVazirBoldB64 };
   })();
 
   return fontLoadPromise;
+}
+
+function savePdfBlobDownload(pdf: jsPDF, fileName: string): void {
+  const safeFileName = fileName.endsWith('.pdf') ? fileName : `${fileName}.pdf`;
+  try {
+    const arrayBuffer = pdf.output('arraybuffer');
+    const blob = new Blob([arrayBuffer], { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = safeFileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  } catch {
+    pdf.save(safeFileName);
+  }
 }
 
 // Warm up TTF fonts in background
@@ -283,8 +321,8 @@ function splitSegmentIntoScriptRuns(
     return runs;
   }
 
-  // In RTL mode, any English word / ASCII number phrase renders in Times New Roman ('latin')
-  const latinInRtlRegex = /[A-Za-z0-9]+(?:[ \t./\-+:,&×xX%][A-Za-z0-9%]+)*/g;
+  // In RTL mode, any English word / ASCII number phrase (including leading hyphen placeholders like -mm, --mm, -cm) renders in Times New Roman ('latin')
+  const latinInRtlRegex = /(?:[-–—_]+\s*)?[A-Za-z0-9]+(?:[ \t./\-+:,&×xX%][A-Za-z0-9%]+)*/g;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
   while ((match = latinInRtlRegex.exec(text)) !== null) {
@@ -333,6 +371,7 @@ interface ParsedParagraphBlock {
 interface ParsedTableBlock {
   type: 'table';
   rows: Array<Array<{ text: string; bold: boolean }>>;
+  widthRatio?: number;
 }
 
 type ParsedHtmlBlock = ParsedParagraphBlock | ParsedTableBlock;
@@ -504,7 +543,18 @@ function parseHtmlToBlocks(rawHtml: string): ParsedHtmlBlock[] {
           }
         });
         if (rows.length > 0) {
-          blocks.push({ type: 'table', rows });
+          const rawWidthAttr = (el.getAttribute('data-table-width') || el.style?.width || '').trim().toLowerCase();
+          let widthRatio = 1;
+          if (rawWidthAttr === 'auto' || rawWidthAttr === 'fit-content') {
+            const numCols = Math.max(...rows.map((r) => r.length));
+            widthRatio = Math.min(1, Math.max(0.45, numCols * 0.22));
+          } else if (rawWidthAttr.endsWith('%')) {
+            const pct = parseFloat(rawWidthAttr);
+            if (!isNaN(pct) && pct >= 25 && pct <= 100) {
+              widthRatio = pct / 100;
+            }
+          }
+          blocks.push({ type: 'table', rows, widthRatio });
         }
       } else if (tag === 'ul' || tag === 'ol') {
         flushLoose();
@@ -775,9 +825,14 @@ export interface VectorPdfExportParams {
   monochromePrintMode: boolean;
   preprintedLetterheadMode: boolean;
   preprintedTopMarginMm: number;
+  headerFontCss?: string;
   headerFontSize: number;
+  headingFontCss?: string;
   headingFontSize: number;
+  bodyFontCss?: string;
   bodyFontSize: number;
+  doctorStampFontCss?: string;
+  doctorStampFontSize?: number;
   lineHeight: number;
 }
 
@@ -798,11 +853,22 @@ export async function exportTrueVectorPdfReport(
     monochromePrintMode,
     preprintedLetterheadMode,
     preprintedTopMarginMm,
+    headerFontCss = "'Vazirmatn', sans-serif",
     headerFontSize,
+    headingFontCss = "'Vazirmatn', sans-serif",
     headingFontSize,
+    bodyFontCss = "'Vazirmatn', sans-serif",
     bodyFontSize,
+    doctorStampFontCss = doctor.stampFont || "'Vazirmatn', sans-serif",
+    doctorStampFontSize = doctor.stampFontSize || 13,
     lineHeight,
   } = params;
+
+  const baseName = `Report_PDF_${
+    patientInfo.nationalId || patientInfo.admissionNumber || 'Radiology'
+  }_${patientInfo.fullName || 'Patient'}`;
+
+  try {
 
   const [{ regular: vazirRegB64, bold: vazirBoldB64 }, headerLogoPng, watermarkPng, signaturePng] =
     await Promise.all([
@@ -1226,7 +1292,8 @@ export async function exportTrueVectorPdfReport(
           } else if (block.type === 'table' && block.rows.length > 0) {
             const numCols = Math.max(...block.rows.map((r) => r.length));
             if (numCols > 0) {
-              const colW = contentWidth / numCols;
+              const tableW = contentWidth * (block.widthRatio || 1);
+              const colW = tableW / numCols;
               const rowH = lineStepMm + 2.2;
               pdf.setDrawColor(148, 163, 184);
               pdf.setLineWidth(0.25);
@@ -1464,11 +1531,26 @@ export async function exportTrueVectorPdfReport(
         );
       }
 
-      // Left Side: Radiologist Stamp & Digital Signature Box (x = 15..75mm)
+      // Left Side: Radiologist Stamp & Digital Signature Box (Supports multi-line specialty & custom stamp font)
       const stampX = marginLeft;
       const stampW = 60;
-      const stampH = 26;
-      const stampY = footerTopY + 2.5;
+      const stampNamePt = pxToPt(doctorStampFontSize || doctor.stampFontSize || 13);
+      const stampSpecPt = Math.max(7.5, stampNamePt - 1.5);
+
+      const rawSpecParagraphs = (doctor.specialty || '')
+        .split(/\r?\n/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const docSpecLines: ScriptRun[][] = [];
+      for (const sp of rawSpecParagraphs) {
+        docSpecLines.push(
+          ...wrapSegmentsIntoLines(pdf, [{ text: sp, bold: true }], 'rtl', stampSpecPt, stampW - 5)
+        );
+      }
+
+      const extraSpecLines = Math.max(0, docSpecLines.length - 1);
+      const stampH = 26 + extraSpecLines * 3.6;
+      const stampY = Math.max(footerTopY + 1, footerTopY + 2.5 - Math.min(3.5, extraSpecLines * 1.6));
 
       pdf.setFillColor(248, 250, 252);
       pdf.setDrawColor(borderRgb[0], borderRgb[1], borderRgb[2]);
@@ -1477,51 +1559,135 @@ export async function exportTrueVectorPdfReport(
       pdf.roundedRect(stampX, stampY, stampW, stampH, 2.5, 2.5, 'FD');
       pdf.setLineDashPattern([], 0);
 
-      const stampNamePt = pxToPt(doctor.stampFontSize || 13);
-      const stampSpecPt = Math.max(7.5, stampNamePt - 1.5);
+      const isCustomStampFont =
+        Boolean(doctorStampFontCss) &&
+        !doctorStampFontCss
+          .replace(/['"]/g, '')
+          .split(',')[0]
+          .trim()
+          .toLowerCase()
+          .startsWith('vazirmatn');
 
-      const docNameLines = wrapSegmentsIntoLines(
-        pdf,
-        [{ text: doctor.name, bold: true }],
-        'rtl',
-        stampNamePt,
-        stampW - 4
-      );
-      if (docNameLines[0]) {
-        drawWrappedLineOnPdf(
+      let drewCustomStampText = false;
+      if (isCustomStampFont && typeof document !== 'undefined') {
+        try {
+          const textBoxH = Math.max(11, 6 + docSpecLines.length * 3.6);
+          const scalePxPerMm = 14; // ~355 DPI
+          const c = document.createElement('canvas');
+          c.width = Math.round(stampW * scalePxPerMm);
+          c.height = Math.round(textBoxH * scalePxPerMm);
+          const sCtx = c.getContext('2d');
+          if (sCtx) {
+            sCtx.scale(scalePxPerMm, scalePxPerMm);
+            const stampNameMm = (doctorStampFontSize || doctor.stampFontSize || 13) * 0.2646;
+            const stampSpecMm = Math.max(2.65, stampNameMm - 0.5);
+            const cNameLines = wrapCanvasSegmentsIntoLines(
+              sCtx,
+              [{ text: doctor.name, bold: true }],
+              'rtl',
+              stampNameMm,
+              stampW - 4,
+              doctorStampFontCss
+            );
+            if (cNameLines[0]) {
+              drawCanvasWrappedLine(
+                sCtx,
+                cNameLines[0],
+                'rtl',
+                2,
+                stampW - 2,
+                4.6,
+                stampNameMm,
+                doctorStampFontCss,
+                activeModalityColor,
+                'center'
+              );
+            }
+            let cSpecY = 8.8;
+            for (const sp of rawSpecParagraphs) {
+              const wrappedSp = wrapCanvasSegmentsIntoLines(
+                sCtx,
+                [{ text: sp, bold: true }],
+                'rtl',
+                stampSpecMm,
+                stampW - 5,
+                doctorStampFontCss
+              );
+              for (const sLine of wrappedSp) {
+                drawCanvasWrappedLine(
+                  sCtx,
+                  sLine,
+                  'rtl',
+                  2,
+                  stampW - 2,
+                  cSpecY,
+                  stampSpecMm,
+                  doctorStampFontCss,
+                  '#0f172a',
+                  'center'
+                );
+                cSpecY += 3.6;
+              }
+            }
+            pdf.addImage(
+              c.toDataURL('image/png'),
+              'PNG',
+              stampX,
+              stampY + 0.6,
+              stampW,
+              textBoxH,
+              undefined,
+              'FAST'
+            );
+            drewCustomStampText = true;
+          }
+        } catch {
+          drewCustomStampText = false;
+        }
+      }
+
+      let specCursorY = stampY + 9.6;
+      if (!drewCustomStampText) {
+        const docNameLines = wrapSegmentsIntoLines(
           pdf,
-          docNameLines[0],
+          [{ text: doctor.name, bold: true }],
           'rtl',
-          stampX + 2,
-          stampX + stampW - 2,
-          stampY + 5.2,
           stampNamePt,
-          activeModalityColor,
-          'center'
+          stampW - 4
         );
+        if (docNameLines[0]) {
+          drawWrappedLineOnPdf(
+            pdf,
+            docNameLines[0],
+            'rtl',
+            stampX + 2,
+            stampX + stampW - 2,
+            stampY + 5.2,
+            stampNamePt,
+            activeModalityColor,
+            'center'
+          );
+        }
+
+        for (const sLine of docSpecLines) {
+          drawWrappedLineOnPdf(
+            pdf,
+            sLine,
+            'rtl',
+            stampX + 2,
+            stampX + stampW - 2,
+            specCursorY,
+            stampSpecPt,
+            '#0f172a',
+            'center'
+          );
+          specCursorY += 3.6;
+        }
+      } else {
+        specCursorY = stampY + 9.6 + docSpecLines.length * 3.6;
       }
 
-      const docSpecLines = wrapSegmentsIntoLines(
-        pdf,
-        [{ text: doctor.specialty || '', bold: true }],
-        'rtl',
-        stampSpecPt,
-        stampW - 4
-      );
-      if (docSpecLines[0]) {
-        drawWrappedLineOnPdf(
-          pdf,
-          docSpecLines[0],
-          'rtl',
-          stampX + 2,
-          stampX + stampW - 2,
-          stampY + 9.8,
-          stampSpecPt,
-          '#0f172a',
-          'center'
-        );
-      }
-
+      const mcY = Math.max(stampY + 13.6, specCursorY + 0.3);
       const mcLines = wrapSegmentsIntoLines(
         pdf,
         [{ text: `شماره نظام پزشکی: ${doctor.medicalCouncilId || ''}`, bold: true }],
@@ -1536,7 +1702,7 @@ export async function exportTrueVectorPdfReport(
           'rtl',
           stampX + 2,
           stampX + stampW - 2,
-          stampY + 13.8,
+          mcY,
           7.4,
           '#1e293b',
           'center'
@@ -1544,19 +1710,58 @@ export async function exportTrueVectorPdfReport(
       }
 
       if (signaturePng) {
-        const sigH = 9.5;
+        const sigH = 9.2;
         const sigW = Math.min(42, sigH * signaturePng.aspect);
         const sigX = stampX + (stampW - sigW) / 2;
-        const sigY = stampY + 15.2;
+        const sigY = mcY + 1.3;
         pdf.addImage(signaturePng.dataUrl, 'PNG', sigX, sigY, sigW, sigH, undefined, 'FAST');
       }
     }
   });
 
-  const baseName = `Report_PDF_${
-    patientInfo.nationalId || patientInfo.admissionNumber || 'Radiology'
-  }_${patientInfo.fullName || 'Patient'}`;
-  pdf.save(`${baseName}.pdf`);
+  savePdfBlobDownload(pdf, `${baseName}.pdf`);
+  } catch (vecErr) {
+    console.warn('Vector PDF font fallback triggered, generating 300-DPI A4 PDF:', vecErr);
+    const fallbackPdf = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'a4',
+      compress: true,
+    });
+    for (let i = 0; i < pages.length; i++) {
+      if (i > 0) {
+        fallbackPdf.addPage('a4', 'portrait');
+      }
+      const canvas = await renderTrueVectorCanvasPage({
+        patientInfo,
+        studies,
+        doctor,
+        settings,
+        sheet: pages[i],
+        totalPages,
+        effectiveLogoUrl,
+        effectiveSignatureUrl,
+        qrDataUrl,
+        qrMode,
+        monochromePrintMode,
+        preprintedLetterheadMode,
+        preprintedTopMarginMm,
+        headerFontCss,
+        headerFontSize,
+        headingFontCss,
+        headingFontSize,
+        bodyFontCss,
+        bodyFontSize,
+        doctorStampFontCss,
+        doctorStampFontSize,
+        lineHeight,
+        dpiScale: 2.5,
+      });
+      const pageDataUrl = canvas.toDataURL('image/png');
+      fallbackPdf.addImage(pageDataUrl, 'PNG', 0, 0, 210, 297, undefined, 'FAST');
+    }
+    savePdfBlobDownload(fallbackPdf, `${baseName}.pdf`);
+  }
 }
 
 // ============================================================================
@@ -2314,7 +2519,8 @@ export async function renderTrueVectorCanvasPage(
         } else if (block.type === 'table' && block.rows.length > 0) {
           const numCols = Math.max(...block.rows.map((r) => r.length));
           if (numCols > 0) {
-            const colW = contentWidth / numCols;
+            const tableW = contentWidth * (block.widthRatio || 1);
+            const colW = tableW / numCols;
             const rowH = lineStepMm + 2.2;
             ctx.strokeStyle = '#94a3b8';
             ctx.lineWidth = 0.25;
@@ -2602,11 +2808,33 @@ export async function renderTrueVectorCanvasPage(
       );
     }
 
-    // Left Side: Doctor Stamp & Signature Box
+    // Left Side: Doctor Stamp & Signature Box (Supports multi-line specialty & custom stamp font)
     const stampX = marginLeft;
     const stampW = 60;
-    const stampH = 26;
-    const stampY = footerTopY + 2.5;
+    const stampNameMm = pxToMm(doctorStampFontSize || 13);
+    const stampSpecMm = Math.max(2.65, stampNameMm - 0.5);
+
+    const rawSpecParagraphs = (doctor.specialty || '')
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const docSpecLines: ScriptRun[][] = [];
+    for (const sp of rawSpecParagraphs) {
+      docSpecLines.push(
+        ...wrapCanvasSegmentsIntoLines(
+          ctx,
+          [{ text: sp, bold: true }],
+          'rtl',
+          stampSpecMm,
+          stampW - 5,
+          doctorStampFontCss
+        )
+      );
+    }
+
+    const extraSpecLines = Math.max(0, docSpecLines.length - 1);
+    const stampH = 26 + extraSpecLines * 3.6;
+    const stampY = Math.max(footerTopY + 1, footerTopY + 2.5 - Math.min(3.5, extraSpecLines * 1.6));
 
     ctx.save();
     ctx.fillStyle = '#f8fafc';
@@ -2618,9 +2846,6 @@ export async function renderTrueVectorCanvasPage(
     ctx.fill();
     ctx.stroke();
     ctx.restore();
-
-    const stampNameMm = pxToMm(doctorStampFontSize || 13);
-    const stampSpecMm = Math.max(2.65, stampNameMm - 0.5);
 
     const docNameLines = wrapCanvasSegmentsIntoLines(
       ctx,
@@ -2645,29 +2870,24 @@ export async function renderTrueVectorCanvasPage(
       );
     }
 
-    const docSpecLines = wrapCanvasSegmentsIntoLines(
-      ctx,
-      [{ text: doctor.specialty || '', bold: true }],
-      'rtl',
-      stampSpecMm,
-      stampW - 4,
-      doctorStampFontCss
-    );
-    if (docSpecLines[0]) {
+    let specCursorY = stampY + 9.6;
+    for (const sLine of docSpecLines) {
       drawCanvasWrappedLine(
         ctx,
-        docSpecLines[0],
+        sLine,
         'rtl',
         stampX + 2,
         stampX + stampW - 2,
-        stampY + 9.8,
+        specCursorY,
         stampSpecMm,
         doctorStampFontCss,
         '#0f172a',
         'center'
       );
+      specCursorY += 3.6;
     }
 
+    const mcY = Math.max(stampY + 13.6, specCursorY + 0.3);
     const mcLines = wrapCanvasSegmentsIntoLines(
       ctx,
       [{ text: `شماره نظام پزشکی: ${doctor.medicalCouncilId || ''}`, bold: true }],
@@ -2683,7 +2903,7 @@ export async function renderTrueVectorCanvasPage(
         'rtl',
         stampX + 2,
         stampX + stampW - 2,
-        stampY + 13.8,
+        mcY,
         2.6,
         doctorStampFontCss,
         '#1e293b',
@@ -2697,10 +2917,10 @@ export async function renderTrueVectorCanvasPage(
       const natW = sigImg.naturalWidth || 300;
       const natH = sigImg.naturalHeight || 110;
       const aspect = natW / natH || 2.5;
-      const sigH = 9.5;
+      const sigH = 9.2;
       const sigW = Math.min(42, sigH * aspect);
       const sigX = stampX + (stampW - sigW) / 2;
-      const sigY = stampY + 15.2;
+      const sigY = mcY + 1.3;
       ctx.drawImage(sigImg, sigX, sigY, sigW, sigH);
       ctx.restore();
     }

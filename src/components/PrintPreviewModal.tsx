@@ -169,10 +169,22 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
     return `'TimesNewRomanLatin', '${cleanName}', 'Vazirmatn', 'Times New Roman', 'Noto Naskh Arabic', Tahoma, sans-serif`;
   };
 
+  const formatStampFontStack = (fontVal: string) => {
+    const trimmed = (fontVal || "'Vazirmatn', sans-serif").trim();
+    const cleanName = trimmed.replace(/['"]/g, '').split(',')[0].trim();
+    if (!cleanName || cleanName.toLowerCase() === 'vazirmatn') {
+      return "'Vazirmatn', sans-serif";
+    }
+    if (trimmed.includes(',')) {
+      return trimmed;
+    }
+    return `'${cleanName}', 'Vazirmatn', sans-serif`;
+  };
+
   const resolvedHeaderFontCss = formatCssFontStack(headerFont);
   const resolvedHeadingFontCss = formatCssFontStack(headingFont);
   const resolvedBodyFontCss = formatCssFontStack(bodyFont);
-  const resolvedDoctorStampFontCss = formatCssFontStack(
+  const resolvedDoctorStampFontCss = formatStampFontStack(
     doctor.stampFont || headerFont || "'Vazirmatn', sans-serif"
   );
   const resolvedDoctorStampFontSize = doctor.stampFontSize || 13;
@@ -682,21 +694,27 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
         monochromePrintMode,
         preprintedLetterheadMode,
         preprintedTopMarginMm,
+        headerFontCss: resolvedHeaderFontCss,
         headerFontSize,
+        headingFontCss: resolvedHeadingFontCss,
         headingFontSize,
+        bodyFontCss: resolvedBodyFontCss,
         bodyFontSize: bodyFontSize || 14,
+        doctorStampFontCss: resolvedDoctorStampFontCss,
+        doctorStampFontSize: resolvedDoctorStampFontSize,
         lineHeight: unifiedLineHeight,
       });
 
       setShareFeedback(
         total > 1
-          ? `✓ فایل PDF وکتور واقعی (${total} صفحه A4 با قابلیت انتخاب متن و زوم بی‌نهایت) دانلود شد.`
-          : '✓ فایل PDF وکتور واقعی (A4 با قابلیت انتخاب متن و فونت Times New Roman / وزیرمتن) دانلود شد.'
+          ? `✓ فایل PDF (${total} صفحه A4) با موفقیت دانلود شد.`
+          : '✓ فایل PDF گزارش A4 با موفقیت دانلود شد.'
       );
       setTimeout(() => setShareFeedback(''), 4000);
     } catch (err) {
-      console.warn('PDF export warning:', err);
-      handleDownloadPrintHtml();
+      console.error('PDF export error:', err);
+      setShareFeedback('خطا در تولید فایل PDF. لطفاً مجدداً تلاش کنید.');
+      setTimeout(() => setShareFeedback(''), 4000);
     } finally {
       setIsExportingPdf(false);
     }
@@ -1547,16 +1565,19 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                         </div>
                       </div>
 
-                      {/* Radiologist Stamp & Independent Signature per Doctor (Respects doctor.stampFont & doctor.stampFontSize) */}
+                      {/* Radiologist Stamp & Independent Signature per Doctor (Respects doctor.stampFont, doctor.stampFontSize & multi-line specialty) */}
                       <div
-                        className="doctor-stamp-box text-center px-4 py-2.5 rounded-xl border-2 border-dashed min-w-[215px] bg-slate-50/60"
-                        style={{
-                          borderColor: monochromePrintMode ? '#000000' : activeModalityColor,
-                          fontFamily: resolvedDoctorStampFontCss,
-                        }}
+                        className="doctor-stamp-box text-center px-4 py-2.5 rounded-xl border-2 border-dashed min-w-[195px] max-w-[235px] w-fit bg-slate-50/60"
+                        style={
+                          {
+                            borderColor: monochromePrintMode ? '#000000' : activeModalityColor,
+                            '--stamp-font-family': resolvedDoctorStampFontCss,
+                            fontFamily: resolvedDoctorStampFontCss,
+                          } as React.CSSProperties
+                        }
                       >
                         <div
-                          className="font-black"
+                          className="font-bold leading-snug break-words"
                           style={{
                             color: monochromePrintMode ? '#000000' : activeModalityColor,
                             fontFamily: resolvedDoctorStampFontCss,
@@ -1566,7 +1587,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                           {doctor.name}
                         </div>
                         <div
-                          className="font-bold text-slate-900 mt-0.5"
+                          className="font-semibold text-slate-900 mt-0.5 whitespace-pre-line leading-snug break-words"
                           style={{
                             fontFamily: resolvedDoctorStampFontCss,
                             fontSize: `${Math.max(10, resolvedDoctorStampFontSize - 2)}px`,

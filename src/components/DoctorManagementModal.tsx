@@ -43,12 +43,17 @@ const SAMPLE_DOCTOR_SIGNATURES: { id: string; label: string; url: string }[] = [
 const STAMP_FONT_OPTIONS: { label: string; value: string }[] = [
   { label: 'وزیرمتن استاندارد (Vazirmatn)', value: "'Vazirmatn', sans-serif" },
   { label: 'لاله‌زار بولد و رسمی (Lalezar)', value: "'Lalezar', 'Vazirmatn', sans-serif" },
+  { label: 'پرستو / نازنین کلاسیک (Parastoo)', value: "'Parastoo', 'Amiri', 'Vazirmatn', serif" },
+  { label: 'تنها — سنتی ویژه مهر (Tanha)', value: "'Tanha', 'Vazirmatn', serif" },
   { label: 'امیری کلاسیک پزشکی (Amiri)', value: "'Amiri', 'Vazirmatn', serif" },
   { label: 'نسخ رسمی (Noto Naskh Arabic)', value: "'Noto Naskh Arabic', 'Vazirmatn', serif" },
+  { label: 'ساحل رسمی (Sahel)', value: "'Sahel', 'Vazirmatn', sans-serif" },
+  { label: 'شبنم مدرن (Shabnam)', value: "'Shabnam', 'Vazirmatn', sans-serif" },
+  { label: 'صمیم کلاسیک (Samim)', value: "'Samim', 'Vazirmatn', sans-serif" },
   { label: 'مرکزی رسمی (Markazi Text)', value: "'Markazi Text', 'Vazirmatn', serif" },
   { label: 'ریدکس مدرن (Readex Pro)', value: "'Readex Pro', 'Vazirmatn', sans-serif" },
-  { label: 'بی تیتر (B Titr + وب‌فونت جایگزین)', value: "'B Titr', 'Lalezar', 'Vazirmatn', sans-serif" },
-  { label: 'بی نازنین (B Nazanin + وب‌فونت جایگزین)', value: "'B Nazanin', 'Amiri', 'Noto Naskh Arabic', 'Vazirmatn', serif" },
+  { label: 'بی تیتر (B Titr + لاله‌زار)', value: "'B Titr', 'Lalezar', 'Vazirmatn', sans-serif" },
+  { label: 'بی نازنین (B Nazanin + پرستو)', value: "'B Nazanin', 'Parastoo', 'Amiri', 'Noto Naskh Arabic', 'Vazirmatn', serif" },
   { label: 'ایران نستعلیق (IranNastaliq + امیری)', value: "'IranNastaliq', 'Amiri', 'Vazirmatn', serif" },
 ];
 
@@ -227,14 +232,14 @@ export const DoctorManagementModal: React.FC<DoctorManagementModalProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                    تخصص یا فلوشیپ (چاپ زیر نام پزشک در مهر):
+                    تخصص یا فلوشیپ در مهر (با Enter چندخطی کنید):
                   </label>
-                  <input
-                    type="text"
+                  <textarea
+                    rows={2}
                     value={specialty}
                     onChange={(e) => setSpecialty(e.target.value)}
-                    placeholder="متخصص رادیولوژی و سونوگرافی، فلوشیپ ام‌آر‌آی"
-                    className="w-full text-xs p-2 rounded-lg border border-slate-200 bg-white"
+                    placeholder={"متخصص رادیولوژی و سونوگرافی\nفلوشیپ ام‌آر‌آی و اینترونشن"}
+                    className="w-full text-xs p-2 rounded-lg border border-slate-200 bg-white resize-y leading-relaxed"
                   />
                 </div>
                 <div>
@@ -419,7 +424,9 @@ export const DoctorManagementModal: React.FC<DoctorManagementModalProps> = ({
                             </span>
                           )}
                         </div>
-                        <div className="text-xs text-slate-500 mt-0.5">{doc.specialty}</div>
+                        <div className="text-xs text-slate-500 mt-0.5 whitespace-pre-line leading-snug">
+                          {doc.specialty}
+                        </div>
                         <div className="text-[11px] text-slate-400 font-mono mt-0.5">
                           شماره نظام پزشکی: {doc.medicalCouncilId}
                         </div>
@@ -524,16 +531,16 @@ export const DoctorManagementModal: React.FC<DoctorManagementModalProps> = ({
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
                           <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                            عنوان تخصص یا فلوشیپ در مهر چاپی:
+                            عنوان تخصص یا فلوشیپ در مهر چاپی (با Enter چندخطی کنید):
                           </label>
-                          <input
-                            type="text"
+                          <textarea
+                            rows={2}
                             value={doc.specialty}
                             onChange={(e) =>
                               onUpdateDoctor?.(doc.id, { specialty: e.target.value })
                             }
-                            placeholder="متخصص رادیولوژی و سونوگرافی"
-                            className="w-full text-xs p-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-teal-500 focus:outline-none"
+                            placeholder={"متخصص رادیولوژی و سونوگرافی\nفلوشیپ تصویربرداری پیشرفته"}
+                            className="w-full text-xs p-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-teal-500 focus:outline-none resize-y leading-relaxed"
                           />
                         </div>
                         <div>
@@ -672,11 +679,16 @@ export const DoctorManagementModal: React.FC<DoctorManagementModalProps> = ({
                             پیش‌نمایش زنده کادر مهر و امضا در برگه چاپ:
                           </div>
                           <div
-                            className="text-center p-3 rounded-xl border-2 border-dashed border-teal-700/60 bg-teal-50/20 flex-1 flex flex-col justify-center"
-                            style={{ fontFamily: docStampFont }}
+                            className="doctor-stamp-box text-center p-3 rounded-xl border-2 border-dashed border-teal-700/60 bg-teal-50/20 flex-1 flex flex-col justify-center max-w-[235px] w-full mx-auto"
+                            style={
+                              {
+                                '--stamp-font-family': docStampFont,
+                                fontFamily: docStampFont,
+                              } as React.CSSProperties
+                            }
                           >
                             <div
-                              className="font-black text-teal-900"
+                              className="font-bold text-teal-900 leading-snug break-words"
                               style={{
                                 fontFamily: docStampFont,
                                 fontSize: `${docStampFontSize}px`,
@@ -685,7 +697,7 @@ export const DoctorManagementModal: React.FC<DoctorManagementModalProps> = ({
                               {doc.name}
                             </div>
                             <div
-                              className="font-medium text-slate-700 mt-0.5"
+                              className="font-semibold text-slate-700 mt-0.5 whitespace-pre-line leading-snug break-words"
                               style={{
                                 fontFamily: docStampFont,
                                 fontSize: `${Math.max(10, docStampFontSize - 2)}px`,
