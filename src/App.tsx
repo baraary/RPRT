@@ -314,18 +314,30 @@ export default function App() {
   // Active Editor Element reference & Saved Selection Range for document.execCommand
   const activeEditorRef = useRef<HTMLDivElement | null>(null);
   const savedSelectionRangeRef = useRef<Range | null>(null);
+  const lastNonCollapsedRangeRef = useRef<{ range: Range; editor: HTMLElement } | null>(null);
 
-  // Track selection inside active editor so toolbar commands (color, highlight, etc.) never lose selection
+  // Track selection inside active editor so toolbar commands (font, size, direction, color, highlight, etc.) never lose selection
   useEffect(() => {
     const handleSelectionChange = () => {
       const sel = window.getSelection();
-      if (
-        sel &&
-        sel.rangeCount > 0 &&
-        activeEditorRef.current &&
-        activeEditorRef.current.contains(sel.anchorNode)
-      ) {
-        savedSelectionRangeRef.current = sel.getRangeAt(0).cloneRange();
+      const editorEl = activeEditorRef.current;
+      if (sel && sel.rangeCount > 0 && editorEl && editorEl.contains(sel.anchorNode)) {
+        const currentRange = sel.getRangeAt(0);
+        if (!currentRange.collapsed && currentRange.toString().trim().length > 0) {
+          savedSelectionRangeRef.current = currentRange.cloneRange();
+          lastNonCollapsedRangeRef.current = {
+            range: currentRange.cloneRange(),
+            editor: editorEl,
+          };
+        } else {
+          // Only overwrite savedSelectionRangeRef with a collapsed range if focus is actually inside the editor
+          // (not when clicking a <select> dropdown in the toolbar)
+          const activeTag = document.activeElement?.tagName.toLowerCase();
+          if (document.activeElement === editorEl && activeTag !== 'select') {
+            savedSelectionRangeRef.current = currentRange.cloneRange();
+            lastNonCollapsedRangeRef.current = null;
+          }
+        }
       }
     };
     document.addEventListener('selectionchange', handleSelectionChange);
@@ -844,20 +856,401 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [studies, modality]);
 
+  // Normalize <br>-separated lines inside an editor into discrete <p> blocks while preserving the exact selection Range
+  const normalizeEditorLinesPreservingSelection = (editorEl: HTMLElement): Range | null => {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return null;
+    const origRange = sel.getRangeAt(0);
+    if (!editorEl.contains(origRange.commonAncestorContainer)) return null;
+
+    const isCollapsed = origRange.collapsed;
+    const startMarker = document.createElement('span');
+    startMarker.setAttribute('data-sel-bookmark', 'start');
+    startMarker.style.display = 'none';
+    const endMarker = document.createElement('span');
+    endMarker.setAttribute('data-sel-bookmark', 'end');
+    endMarker.style.display = 'none';
+
+    try {
+      if (isCollapsed) {
+        const rClone = origRange.cloneRange();
+        rClone.insertNode(startMarker);
+      } else {
+        const endClone = origRange.cloneRange();
+        endClone.collapse(false);
+        endClone.insertNode(endMarker);
+        const startClone = origRange.cloneRange();
+        startClone.collapse(true);
+        startClone.insertNode(startMarker);
+      }
+    } catch {
+      return origRange;
+    }
+
+    const isBlockTag = (node: Node): boolean => {
+      if (node.nodeType !== Node.ELEMENT_NODE) return false;
+      const tag = (node as HTMLElement).tagName.toLowerCase();
+      return (
+        tag === 'p' ||
+        tag === 'div' ||
+        tag === 'ul' ||
+        tag === 'ol' ||
+        tag === 'li' ||
+        tag === 'table' ||
+        tag === 'h1' ||
+        tag === 'h2' ||
+        tag === 'h3' ||
+        tag === 'h4'
+      );
+    };
+
+    // 1. Wrap any top-level inline/text/<br> nodes directly inside editorEl into discrete <p> elements
+    const hasTopLevelInlineOrBr = Array.from(editorEl.childNodes).some(
+      (n) =>
+        (n.nodeType === Node.TEXT_NODE && (n.textContent || '').trim().length > 0) ||
+        (n.nodeType === Node.ELEMENT_NODE && !isBlockTag(n))
+    );
+
+    if (hasTopLevelInlineOrBr) {
+      const topFragment = document.createDocumentFragment();
+      let currentP: HTMLParagraphElement | null = null;
+
+      const flushCurrentP = () => {
+        if (currentP) {
+          if (currentP.childNodes.length === 0) {
+            currentP.appendChild(document.createElement('br'));
+          }
+          topFragment.appendChild(currentP);
+          currentP = null;
+        }
+      };
+
+      const childrenSnapshot = Array.from(editorEl.childNodes);
+      for (const child of childrenSnapshot) {
+        if (isBlockTag(child)) {
+          flushCurrentP();
+          topFragment.appendChild(child);
+        } else if (
+          child.nodeType === Node.ELEMENT_NODE &&
+          (child as HTMLElement).tagName.toLowerCase() === 'br'
+        ) {
+          if (!currentP) {
+            currentP = document.createElement('p');
+          }
+          flushCurrentP();
+          child.remove();
+        } else {
+          if (!currentP) {
+            currentP = document.createElement('p');
+          }
+          currentP.appendChild(child);
+        }
+      }
+      flushCurrentP();
+      editorEl.innerHTML = '';
+      editorEl.appendChild(topFragment);
+    }
+
+    // 2. Split any <p> or <div> block that contains direct <br> children into discrete <p> blocks per line
+    const candidateBlocks = Array.from(editorEl.querySelectorAll<HTMLElement>('p, div')).filter(
+      (b) =>
+        b !== editorEl &&
+        !b.querySelector('p, div, table, ul, ol, li, h1, h2, h3, h4') &&
+        Array.from(b.children).some((ch) => ch.tagName.toLowerCase() === 'br')
+    );
+
+    for (const block of candidateBlocks) {
+      const parent = block.parentNode;
+      if (!parent) continue;
+      const origDir = block.getAttribute('dir');
+      const origStyle = block.getAttribute('style');
+
+      const makeSplitP = (): HTMLParagraphElement => {
+        const p = document.createElement('p');
+        if (origDir) p.setAttribute('dir', origDir);
+        if (origStyle) p.setAttribute('style', origStyle);
+        return p;
+      };
+
+      const replacementFrag = document.createDocumentFragment();
+      let lineP: HTMLParagraphElement = makeSplitP();
+
+      const blockChildren = Array.from(block.childNodes);
+      for (const node of blockChildren) {
+        if (
+          node.nodeType === Node.ELEMENT_NODE &&
+          (node as HTMLElement).tagName.toLowerCase() === 'br'
+        ) {
+          if (lineP.childNodes.length === 0) {
+            lineP.appendChild(document.createElement('br'));
+          }
+          replacementFrag.appendChild(lineP);
+          lineP = makeSplitP();
+          node.remove();
+        } else {
+          lineP.appendChild(node);
+        }
+      }
+
+      if (lineP.childNodes.length > 0) {
+        replacementFrag.appendChild(lineP);
+      }
+      parent.replaceChild(replacementFrag, block);
+    }
+
+    // 3. Reconstruct the exact Selection Range from the bookmark markers and remove markers
+    const restoredRange = document.createRange();
+    const sMark = editorEl.querySelector('[data-sel-bookmark="start"]');
+    const eMark = editorEl.querySelector('[data-sel-bookmark="end"]');
+
+    if (sMark) {
+      restoredRange.setStartAfter(sMark);
+      if (!isCollapsed && eMark) {
+        restoredRange.setEndBefore(eMark);
+      } else {
+        restoredRange.collapse(true);
+      }
+      sMark.remove();
+      if (eMark) eMark.remove();
+
+      sel.removeAllRanges();
+      sel.addRange(restoredRange);
+      savedSelectionRangeRef.current = restoredRange.cloneRange();
+      return restoredRange;
+    }
+
+    if (eMark) eMark.remove();
+    return sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+  };
+
+  // Apply font-family or font-size strictly to the selected text nodes (or current line if collapsed), never mutating the whole report
+  const applyInlineStyleToSelection = (
+    editorEl: HTMLElement,
+    styleUpdate: { fontFamily?: string; fontSize?: string }
+  ) => {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    let range = sel.getRangeAt(0);
+    if (!editorEl.contains(range.commonAncestorContainer)) return;
+
+    // If selection is collapsed (no text highlighted), apply to the current line <p> only (never the whole report)
+    if (range.collapsed || range.toString().trim().length === 0) {
+      const normRange = normalizeEditorLinesPreservingSelection(editorEl) || range;
+      const anchorNode = normRange.startContainer;
+      const anchorEl =
+        anchorNode.nodeType === Node.ELEMENT_NODE
+          ? (anchorNode as HTMLElement)
+          : anchorNode.parentElement;
+      const block = anchorEl?.closest('p, div, li, h1, h2, h3, h4, td') as HTMLElement | null;
+      if (block && editorEl.contains(block) && block !== editorEl) {
+        if (styleUpdate.fontFamily) {
+          block.style.fontFamily = styleUpdate.fontFamily;
+        }
+        if (styleUpdate.fontSize) {
+          block.style.fontSize = styleUpdate.fontSize;
+        }
+      }
+      return;
+    }
+
+    // Collect all Text nodes inside editorEl that intersect the non-collapsed selection range
+    const textNodesToFormat: Array<{ node: Text; start: number; end: number }> = [];
+    const walker = document.createTreeWalker(editorEl, NodeFilter.SHOW_TEXT, null);
+    let currentText = walker.nextNode() as Text | null;
+
+    while (currentText) {
+      if (range.intersectsNode(currentText)) {
+        const start = currentText === range.startContainer ? range.startOffset : 0;
+        const end =
+          currentText === range.endContainer
+            ? range.endOffset
+            : (currentText.nodeValue || '').length;
+        if (end > start && (currentText.nodeValue || '').slice(start, end).length > 0) {
+          textNodesToFormat.push({ node: currentText, start, end });
+        }
+      }
+      currentText = walker.nextNode() as Text | null;
+    }
+
+    if (textNodesToFormat.length === 0) return;
+
+    const formattedTextNodes: Text[] = [];
+
+    for (const item of textNodesToFormat) {
+      let targetNode = item.node;
+      const valLen = (targetNode.nodeValue || '').length;
+      if (item.end < valLen) {
+        targetNode.splitText(item.end);
+      }
+      if (item.start > 0) {
+        targetNode = targetNode.splitText(item.start);
+      }
+
+      const parent = targetNode.parentElement;
+      if (
+        parent &&
+        parent !== editorEl &&
+        parent.tagName.toLowerCase() === 'span' &&
+        parent.childNodes.length === 1 &&
+        !parent.hasAttribute('data-slot') &&
+        !parent.hasAttribute('data-spell-issue')
+      ) {
+        if (styleUpdate.fontFamily) {
+          parent.style.fontFamily = styleUpdate.fontFamily;
+        }
+        if (styleUpdate.fontSize) {
+          parent.style.fontSize = styleUpdate.fontSize;
+        }
+      } else {
+        const wrapper = document.createElement('span');
+        if (styleUpdate.fontFamily) {
+          wrapper.style.fontFamily = styleUpdate.fontFamily;
+        }
+        if (styleUpdate.fontSize) {
+          wrapper.style.fontSize = styleUpdate.fontSize;
+        }
+        targetNode.parentNode?.insertBefore(wrapper, targetNode);
+        wrapper.appendChild(targetNode);
+      }
+
+      formattedTextNodes.push(targetNode);
+    }
+
+    // Re-select the formatted text nodes so selection stays active for further edits
+    if (formattedTextNodes.length > 0) {
+      const firstNode = formattedTextNodes[0];
+      const lastNode = formattedTextNodes[formattedTextNodes.length - 1];
+      const newRange = document.createRange();
+      newRange.setStart(firstNode, 0);
+      newRange.setEnd(lastNode, (lastNode.nodeValue || '').length);
+      sel.removeAllRanges();
+      sel.addRange(newRange);
+      savedSelectionRangeRef.current = newRange.cloneRange();
+      lastNonCollapsedRangeRef.current = {
+        range: newRange.cloneRange(),
+        editor: editorEl,
+      };
+    }
+  };
+
+  // Apply RTL/LTR direction or text alignment strictly to the selected portion or selected line(s), never flipping the whole report
+  const applyDirectionOrAlignmentToSelection = (
+    editorEl: HTMLElement,
+    mode:
+      | { type: 'direction'; dir: 'rtl' | 'ltr' }
+      | { type: 'align'; align: 'right' | 'center' | 'left' | 'justify' }
+  ) => {
+    const range = normalizeEditorLinesPreservingSelection(editorEl);
+    if (!range) return;
+
+    const leafBlocks = Array.from(
+      editorEl.querySelectorAll<HTMLElement>('p, div, li, h1, h2, h3, h4, td')
+    ).filter(
+      (b) =>
+        b !== editorEl &&
+        !b.querySelector('p, div, li, table, h1, h2, h3, h4') &&
+        range.intersectsNode(b)
+    );
+
+    if (mode.type === 'align') {
+      for (const b of leafBlocks) {
+        b.style.textAlign = mode.align;
+      }
+      return;
+    }
+
+    const dir = mode.dir;
+    const isCollapsed = range.collapsed || range.toString().trim().length === 0;
+
+    // Check if user selected an inline phrase inside a single line where the rest of the line is in the opposite language
+    if (!isCollapsed && leafBlocks.length === 1) {
+      const singleBlock = leafBlocks[0];
+      const selectedStr = range.toString().trim();
+      const fullBlockStr = (singleBlock.textContent || '').trim();
+
+      if (selectedStr.length > 0 && selectedStr.length < fullBlockStr.length - 2) {
+        const unselectedRemainder = fullBlockStr.replace(selectedStr, '').trim();
+        const remainderHasPersian = /[\u0600-\u06FF]/.test(unselectedRemainder);
+        const remainderHasLatin = /[A-Za-z]/.test(unselectedRemainder);
+
+        // If user selected an inline substring inside a line that has other unselected text in the opposite script,
+        // apply inline bidi isolation on the selected phrase so the line itself doesn't jump sides!
+        if (
+          (dir === 'ltr' && remainderHasPersian) ||
+          (dir === 'rtl' && remainderHasLatin && !remainderHasPersian)
+        ) {
+          const textNodes: Array<{ node: Text; start: number; end: number }> = [];
+          const walker = document.createTreeWalker(singleBlock, NodeFilter.SHOW_TEXT, null);
+          let t = walker.nextNode() as Text | null;
+          while (t) {
+            if (range.intersectsNode(t)) {
+              const s = t === range.startContainer ? range.startOffset : 0;
+              const e = t === range.endContainer ? range.endOffset : (t.nodeValue || '').length;
+              if (e > s) textNodes.push({ node: t, start: s, end: e });
+            }
+            t = walker.nextNode() as Text | null;
+          }
+
+          const wrappedNodes: Text[] = [];
+          for (const item of textNodes) {
+            let target = item.node;
+            const len = (target.nodeValue || '').length;
+            if (item.end < len) target.splitText(item.end);
+            if (item.start > 0) target = target.splitText(item.start);
+            const span = document.createElement('span');
+            span.setAttribute('dir', dir);
+            span.style.direction = dir;
+            span.style.unicodeBidi = 'embed';
+            target.parentNode?.insertBefore(span, target);
+            span.appendChild(target);
+            wrappedNodes.push(target);
+          }
+
+          if (wrappedNodes.length > 0) {
+            const sel = window.getSelection();
+            const newR = document.createRange();
+            newR.setStart(wrappedNodes[0], 0);
+            const last = wrappedNodes[wrappedNodes.length - 1];
+            newR.setEnd(last, (last.nodeValue || '').length);
+            sel?.removeAllRanges();
+            sel?.addRange(newR);
+            savedSelectionRangeRef.current = newR.cloneRange();
+          }
+          return;
+        }
+      }
+    }
+
+    // Apply direction and matching alignment ONLY to the target paragraph/line block(s)
+    for (const b of leafBlocks) {
+      b.setAttribute('dir', dir);
+      b.style.direction = dir;
+      b.style.textAlign = dir === 'rtl' ? 'right' : 'left';
+    }
+  };
+
   // Execute formatting commands on active editor (preserving selection range & syncing state)
   const handleExecCommand = (command: string, value?: string) => {
     const editorEl = activeEditorRef.current;
     if (editorEl) {
-      editorEl.focus();
       const sel = window.getSelection();
+      const rangeToRestore =
+        lastNonCollapsedRangeRef.current?.editor === editorEl
+          ? lastNonCollapsedRangeRef.current.range
+          : savedSelectionRangeRef.current;
+
+      editorEl.focus();
+
       if (
-        savedSelectionRangeRef.current &&
+        rangeToRestore &&
         sel &&
-        (!sel.rangeCount || !editorEl.contains(sel.anchorNode))
+        (!sel.rangeCount ||
+          !editorEl.contains(sel.anchorNode) ||
+          (sel.getRangeAt(0).collapsed && !rangeToRestore.collapsed))
       ) {
         try {
           sel.removeAllRanges();
-          sel.addRange(savedSelectionRangeRef.current);
+          sel.addRange(rangeToRestore);
         } catch {}
       }
     }
@@ -866,7 +1259,31 @@ export default function App() {
       document.execCommand('styleWithCSS', false, 'true');
     } catch {}
 
-    if (command === 'hiliteColor' && value === 'transparent') {
+    const fontSizeMapPx: Record<string, string> = {
+      '1': '11px',
+      '2': '12px',
+      '3': '14px',
+      '4': '16px',
+      '5': '18px',
+      '6': '22px',
+    };
+
+    if (command === 'fontName' && value && editorEl) {
+      applyInlineStyleToSelection(editorEl, { fontFamily: value });
+    } else if (command === 'fontSize' && value && editorEl) {
+      const pxVal = fontSizeMapPx[value] || (value.endsWith('px') ? value : `${value}px`);
+      applyInlineStyleToSelection(editorEl, { fontSize: pxVal });
+    } else if (command === 'setDirection' && (value === 'rtl' || value === 'ltr') && editorEl) {
+      applyDirectionOrAlignmentToSelection(editorEl, { type: 'direction', dir: value });
+    } else if (command === 'justifyRight' && editorEl) {
+      applyDirectionOrAlignmentToSelection(editorEl, { type: 'align', align: 'right' });
+    } else if (command === 'justifyCenter' && editorEl) {
+      applyDirectionOrAlignmentToSelection(editorEl, { type: 'align', align: 'center' });
+    } else if (command === 'justifyLeft' && editorEl) {
+      applyDirectionOrAlignmentToSelection(editorEl, { type: 'align', align: 'left' });
+    } else if (command === 'justifyFull' && editorEl) {
+      applyDirectionOrAlignmentToSelection(editorEl, { type: 'align', align: 'justify' });
+    } else if (command === 'hiliteColor' && value === 'transparent') {
       document.execCommand('hiliteColor', false, 'transparent');
       document.execCommand('backColor', false, 'transparent');
       // Also clean up any inline background-color on spans within current selection

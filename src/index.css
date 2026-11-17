@@ -1,5 +1,57 @@
 @import "tailwindcss";
 
+/* ==========================================================================
+   1. Default English Font in Reports: Times New Roman (via unicode-range)
+      Automatically renders all English/Latin characters & ASCII digits in
+      Times New Roman even inside Persian (RTL) sentences written in Vazirmatn!
+   ========================================================================== */
+@font-face {
+  font-family: 'TimesNewRomanLatin';
+  font-style: normal;
+  font-weight: 100 500;
+  font-display: block;
+  src:
+    local('Times New Roman'),
+    local('TimesNewRomanPSMT'),
+    local('Times'),
+    local('Liberation Serif'),
+    url('/fonts/Tinos-Regular.woff2') format('woff2');
+  unicode-range: U+0020-007E, U+00A0-024F, U+1E00-1EFF, U+2010-2027, U+2030-205E;
+}
+
+@font-face {
+  font-family: 'TimesNewRomanLatin';
+  font-style: normal;
+  font-weight: 600 900;
+  font-display: block;
+  src:
+    local('Times New Roman Bold'),
+    local('TimesNewRomanPS-BoldMT'),
+    local('Times Bold'),
+    local('Liberation Serif Bold'),
+    url('/fonts/Tinos-Bold.woff2') format('woff2');
+  unicode-range: U+0020-007E, U+00A0-024F, U+1E00-1EFF, U+2010-2027, U+2030-205E;
+}
+
+/* ==========================================================================
+   2. Un-split Local Vazirmatn Font (Prevents broken/disconnected Persian glyphs)
+   ========================================================================== */
+@font-face {
+  font-family: 'Vazirmatn';
+  font-style: normal;
+  font-weight: 100 500;
+  font-display: block;
+  src: url('/fonts/Vazirmatn-Regular.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Vazirmatn';
+  font-style: normal;
+  font-weight: 600 900;
+  font-display: block;
+  src: url('/fonts/Vazirmatn-Bold.woff2') format('woff2');
+}
+
 :root {
   --modality-accent: #0284c7;
   --modality-accent-soft: rgba(2, 132, 199, 0.08);
@@ -499,11 +551,21 @@ span.rad-slot.active-rad-slot {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  letter-spacing: 0px !important;
+  word-spacing: normal !important;
+  font-kerning: normal;
+  font-feature-settings: "kern" 1, "liga" 1, "calt" 1, "ccmp" 1;
+}
+
+.printable-report * {
+  letter-spacing: 0px !important;
+  font-variant-ligatures: common-ligatures contextual;
+  font-feature-settings: "kern" 1, "liga" 1, "calt" 1, "ccmp" 1;
 }
 
 /* Ensure live font-family, font-size, and line-height changes in PrintPreviewModal and SettingsModal apply immediately to all nested header & body elements */
 .printable-header-section {
-  font-family: var(--header-font-family, 'Vazirmatn', sans-serif) !important;
+  font-family: var(--header-font-family, 'TimesNewRomanLatin', 'Vazirmatn', 'Times New Roman', sans-serif) !important;
   color: #090d16;
 }
 
@@ -515,26 +577,63 @@ span.rad-slot.active-rad-slot {
 .printable-header-section span,
 .printable-header-section strong {
   font-family: inherit !important;
+  letter-spacing: 0px !important;
 }
 
-.printable-findings-content,
+.printable-findings-content {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit !important;
+  color: #090d16;
+  font-weight: 500;
+  letter-spacing: 0px !important;
+}
+
 .printable-findings-content p,
 .printable-findings-content div,
 .printable-findings-content li,
 .printable-findings-content ul,
 .printable-findings-content ol,
 .printable-findings-content span {
-  font-family: inherit !important;
-  font-size: inherit !important;
   line-height: inherit !important;
-  color: #090d16 !important;
   font-weight: 500;
+  letter-spacing: 0px !important;
+}
+
+.printable-findings-content p:not([style*="font-family"]),
+.printable-findings-content div:not([style*="font-family"]),
+.printable-findings-content li:not([style*="font-family"]),
+.printable-findings-content ul:not([style*="font-family"]),
+.printable-findings-content ol:not([style*="font-family"]),
+.printable-findings-content span:not([style*="font-family"]) {
+  font-family: inherit;
+}
+
+.printable-findings-content p:not([style*="font-size"]),
+.printable-findings-content div:not([style*="font-size"]),
+.printable-findings-content li:not([style*="font-size"]),
+.printable-findings-content ul:not([style*="font-size"]),
+.printable-findings-content ol:not([style*="font-size"]),
+.printable-findings-content span:not([style*="font-size"]) {
+  font-size: inherit;
+}
+
+.printable-findings-content p:not([style*="color"]),
+.printable-findings-content div:not([style*="color"]),
+.printable-findings-content li:not([style*="color"]),
+.printable-findings-content span:not([style*="color"]) {
+  color: #090d16;
 }
 
 .printable-findings-content strong,
 .printable-findings-content b {
-  color: #000000 !important;
   font-weight: 800 !important;
+  letter-spacing: 0px !important;
+}
+
+.printable-findings-content strong:not([style*="color"]),
+.printable-findings-content b:not([style*="color"]) {
+  color: #000000 !important;
 }
 
 .printable-report .study-heading,
@@ -542,8 +641,9 @@ span.rad-slot.active-rad-slot {
 .printable-findings-content h1,
 .printable-findings-content h2,
 .printable-findings-content h3 {
-  font-family: var(--heading-font-family, 'Vazirmatn', sans-serif) !important;
+  font-family: var(--heading-font-family, 'TimesNewRomanLatin', 'Vazirmatn', 'Times New Roman', sans-serif) !important;
   font-size: var(--heading-font-size, 16px) !important;
+  letter-spacing: 0px !important;
 }
 
 /* Printable report styles */

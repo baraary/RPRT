@@ -1122,30 +1122,9 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
     }
   };
 
-  // Apply direction (RTL or LTR) to the selected block/paragraph from Floating Toolbar
+  // Apply direction (RTL or LTR) strictly to the selected text/paragraph from Floating Toolbar without moving the rest of the report
   const applyFloatingDirection = (dir: 'rtl' | 'ltr') => {
-    const activeEl = findingsRefs.current[activeStudyId];
-    if (activeEl) {
-      activeEl.focus();
-      const sel = window.getSelection();
-      if (sel && sel.rangeCount > 0) {
-        const node = sel.anchorNode;
-        const el =
-          node?.nodeType === Node.ELEMENT_NODE
-            ? (node as HTMLElement)
-            : node?.parentElement;
-        const block = el?.closest('p, div, li, h1, h2, h3, h4, td') as HTMLElement | null;
-        if (block && activeEl.contains(block) && block !== activeEl) {
-          block.setAttribute('dir', dir);
-          block.style.direction = dir;
-          block.style.textAlign = dir === 'rtl' ? 'right' : 'left';
-        } else {
-          activeEl.setAttribute('dir', dir);
-          activeEl.style.direction = dir;
-        }
-        onUpdateStudy(activeStudyId, { findingsHtml: activeEl.innerHTML });
-      }
-    }
+    executeFloatingFormat('setDirection', dir);
   };
 
   // Proposal #2: Real-Time Laterality (Right vs Left) Mismatch Detection
@@ -2317,7 +2296,7 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                           : 1
                       }
                       style={{
-                        fontFamily: headingFont,
+                        fontFamily: `'TimesNewRomanLatin', ${headingFont}, 'Vazirmatn', 'Times New Roman', serif`,
                         fontSize: `${Math.round((((parseInt(headingFontSize, 10) || 16) + 3) * editorZoom) / 100)}px`,
                         direction: studyDir,
                         textAlign: studyDir === 'ltr' ? 'left' : 'right',
@@ -2682,7 +2661,12 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                         contentEditable={!isReportLocked}
                         dir={studyDir}
                         onClick={(e) => handleEditorClick(e, study.id)}
-                        onFocus={() => setActiveStudyId(study.id)}
+                        onFocus={(e) => {
+                          setActiveStudyId(study.id);
+                          if (onRegisterActiveEditorRef) {
+                            onRegisterActiveEditorRef(e.currentTarget);
+                          }
+                        }}
                         onPaste={(e) => {
                           if (isReportLocked) return;
                           handlePasteAsPlainText(e, () => {
@@ -2701,7 +2685,7 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                           isReportLocked ? 'opacity-85 cursor-not-allowed' : ''
                         }`}
                         style={{
-                          fontFamily: `${defaultFont}, 'Vazirmatn', sans-serif`,
+                          fontFamily: `'TimesNewRomanLatin', ${defaultFont}, 'Vazirmatn', 'Times New Roman', serif`,
                           fontSize: `${Math.round((((defaultFontSize || 14) + 6) * editorZoom) / 100)}px`,
                           lineHeight: editorLineHeight || 1.9,
                           direction: studyDir,
@@ -2903,6 +2887,7 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                                   : 'شرح بررسی پیشین و مقایسه تغییرات...'
                               }
                               style={{
+                                fontFamily: `'TimesNewRomanLatin', ${defaultFont}, 'Vazirmatn', 'Times New Roman', serif`,
                                 fontSize: `${Math.round((((defaultFontSize || 14) + 4) * editorZoom) / 100)}px`,
                                 direction: studyDir,
                                 textAlign: studyDir === 'rtl' ? 'right' : 'left',
@@ -2955,6 +2940,12 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                               contentEditable
                               dir={studyDir}
                               dangerouslySetInnerHTML={{ __html: study.impressionHtml }}
+                              onFocus={(e) => {
+                                setActiveStudyId(study.id);
+                                if (onRegisterActiveEditorRef) {
+                                  onRegisterActiveEditorRef(e.currentTarget);
+                                }
+                              }}
                               onPaste={(e) =>
                                 handlePasteAsPlainText(e, (cleanHtml) =>
                                   onUpdateStudy(study.id, { impressionHtml: cleanHtml })
@@ -2972,7 +2963,7 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                               }}
                               className="max-w-none min-h-[90px] p-3 rounded-xl bg-slate-50/50 border border-slate-200 focus:border-teal-500 focus:outline-none text-slate-800 shadow-inner high-visibility-editor"
                               style={{
-                                fontFamily: `${defaultFont}, 'Vazirmatn', sans-serif`,
+                                fontFamily: `'TimesNewRomanLatin', ${defaultFont}, 'Vazirmatn', 'Times New Roman', serif`,
                                 fontSize: `${Math.round((((defaultFontSize || 14) + 5) * editorZoom) / 100)}px`,
                                 lineHeight: editorLineHeight || 1.9,
                                 direction: studyDir,
@@ -3010,6 +3001,12 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                               contentEditable
                               dir={studyDir}
                               dangerouslySetInnerHTML={{ __html: study.recommendationsHtml }}
+                              onFocus={(e) => {
+                                setActiveStudyId(study.id);
+                                if (onRegisterActiveEditorRef) {
+                                  onRegisterActiveEditorRef(e.currentTarget);
+                                }
+                              }}
                               onPaste={(e) =>
                                 handlePasteAsPlainText(e, (cleanHtml) =>
                                   onUpdateStudy(study.id, { recommendationsHtml: cleanHtml })
@@ -3027,7 +3024,7 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                               }}
                               className="max-w-none min-h-[60px] p-2.5 rounded-lg bg-slate-50/50 border border-slate-200 focus:border-teal-500 focus:outline-none high-visibility-editor"
                               style={{
-                                fontFamily: `${defaultFont}, 'Vazirmatn', sans-serif`,
+                                fontFamily: `'TimesNewRomanLatin', ${defaultFont}, 'Vazirmatn', 'Times New Roman', serif`,
                                 fontSize: `${Math.round((((defaultFontSize || 14) + 4.5) * editorZoom) / 100)}px`,
                                 lineHeight: editorLineHeight || 1.9,
                                 direction: studyDir,

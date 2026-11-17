@@ -535,17 +535,32 @@ app.post('/api/lan/sync', (req, res) => {
 
 // Configure Vite middleware in development or serve static in production
 async function startServer() {
-  if (!isProd) {
-    const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({
-      server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
+  if (isProd) {
     app.use(express.static(path.join(__dirname, 'dist')));
     app.get('*', (req, res) => {
       res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+    });
+  } else {
+    let viteMiddleware: any = null;
+    const viteInitPromise = import('vite')
+      .then(({ createServer: createViteServer }) =>
+        createViteServer({
+          server: { middlewareMode: true, hmr: false, ws: false, watch: null },
+          appType: 'spa',
+        })
+      )
+      .then((vite) => {
+        viteMiddleware = vite.middlewares;
+        return viteMiddleware;
+      });
+
+    app.use(async (req, res, next) => {
+      try {
+        const mw = viteMiddleware || (await viteInitPromise);
+        return mw(req, res, next);
+      } catch (err) {
+        return next(err);
+      }
     });
   }
 
@@ -562,3 +577,4 @@ async function startServer() {
 }
 
 startServer();
+

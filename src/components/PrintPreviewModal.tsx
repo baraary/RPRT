@@ -13,8 +13,6 @@ import {
   Type,
 } from 'lucide-react';
 import QRCode from 'qrcode';
-import { toSvg } from 'html-to-image';
-import { jsPDF } from 'jspdf';
 import {
   stripSpellHighlights,
   paginateStudiesIntoA4Pages,
@@ -22,158 +20,10 @@ import {
   getOfficialClinicLogoDataUri,
   isOfficialClinicLogoUri,
 } from '../services/typistUtils';
-
-// ============================================================================
-// Pre-Cached Web Font Embedder & Image Loader for Instant, Vector-Sharp Export
-// ============================================================================
-const GOOGLE_REPORT_FONTS_CSS_URL =
-  'https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700;800;900&family=Lalezar&family=Amiri:wght@400;700&family=Noto+Naskh+Arabic:wght@400;600;700&family=Noto+Sans+Arabic:wght@400;600;700;800&family=Markazi+Text:wght@500;700&family=Readex+Pro:wght@400;600;700&display=swap';
-
-const EXTRA_PERSIAN_WOFF2_FONTS: Array<{ family: string; weight: string; url: string }> = [
-  {
-    family: 'Sahel',
-    weight: '400',
-    url: 'https://cdn.jsdelivr.net/gh/rastikerdar/sahel-font@v3.4.0/dist/Sahel.woff2',
-  },
-  {
-    family: 'Sahel',
-    weight: '700',
-    url: 'https://cdn.jsdelivr.net/gh/rastikerdar/sahel-font@v3.4.0/dist/Sahel-Bold.woff2',
-  },
-  {
-    family: 'Samim',
-    weight: '400',
-    url: 'https://cdn.jsdelivr.net/gh/rastikerdar/samim-font@v4.0.5/dist/Samim.woff2',
-  },
-  {
-    family: 'Samim',
-    weight: '700',
-    url: 'https://cdn.jsdelivr.net/gh/rastikerdar/samim-font@v4.0.5/dist/Samim-Bold.woff2',
-  },
-  {
-    family: 'Shabnam',
-    weight: '400',
-    url: 'https://cdn.jsdelivr.net/gh/rastikerdar/shabnam-font@v5.0.1/dist/Shabnam.woff2',
-  },
-  {
-    family: 'Shabnam',
-    weight: '700',
-    url: 'https://cdn.jsdelivr.net/gh/rastikerdar/shabnam-font@v5.0.1/dist/Shabnam-Bold.woff2',
-  },
-  {
-    family: 'Parastoo',
-    weight: '400',
-    url: 'https://cdn.jsdelivr.net/gh/rastikerdar/parastoo-font@v2.0.1/dist/Parastoo.woff2',
-  },
-  {
-    family: 'Parastoo',
-    weight: '700',
-    url: 'https://cdn.jsdelivr.net/gh/rastikerdar/parastoo-font@v2.0.1/dist/Parastoo-Bold.woff2',
-  },
-  {
-    family: 'Tanha',
-    weight: '400',
-    url: 'https://cdn.jsdelivr.net/gh/rastikerdar/tanha-font@v0.10/dist/Tanha.woff2',
-  },
-];
-
-const fontUrlDataCache = new Map<string, string>();
-let baseGoogleFontEmbedPromise: Promise<string> | null = null;
-
-async function fetchUrlAsBase64DataUri(url: string): Promise<string> {
-  const cached = fontUrlDataCache.get(url);
-  if (cached) return cached;
-  const res = await fetch(url, { cache: 'force-cache', mode: 'cors' });
-  if (!res.ok) throw new Error(`Font fetch status ${res.status}`);
-  const blob = await res.blob();
-  const dataUri = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(String(reader.result || ''));
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
-  fontUrlDataCache.set(url, dataUri);
-  return dataUri;
-}
-
-function getPrewarmedGoogleFontEmbedCss(): Promise<string> {
-  if (baseGoogleFontEmbedPromise) return baseGoogleFontEmbedPromise;
-  baseGoogleFontEmbedPromise = (async () => {
-    try {
-      const res = await fetch(GOOGLE_REPORT_FONTS_CSS_URL, { cache: 'force-cache', mode: 'cors' });
-      if (!res.ok) return '';
-      let cssText = await res.text();
-      const urlMatches = Array.from(cssText.matchAll(/url\((['"]?)(https:\/\/[^)'"]+)\1\)/g));
-      const uniqueUrls = Array.from(new Set(urlMatches.map((m) => m[2])));
-      await Promise.all(
-        uniqueUrls.map(async (u) => {
-          try {
-            const dataUri = await fetchUrlAsBase64DataUri(u);
-            if (dataUri) {
-              cssText = cssText.split(u).join(dataUri);
-            }
-          } catch {}
-        })
-      );
-      return cssText;
-    } catch {
-      return '';
-    }
-  })();
-  return baseGoogleFontEmbedPromise;
-}
-
-async function getFastEmbeddedFontCss(activeCssFontStacks: string[]): Promise<string> {
-  const googleCss = await getPrewarmedGoogleFontEmbedCss();
-  const combinedStacks = activeCssFontStacks.join(' ').toLowerCase();
-  const extraRules: string[] = [];
-
-  const neededExtras = EXTRA_PERSIAN_WOFF2_FONTS.filter((f) =>
-    combinedStacks.includes(f.family.toLowerCase())
-  );
-  if (neededExtras.length > 0) {
-    await Promise.all(
-      neededExtras.map(async (f) => {
-        try {
-          const dataUri = await fetchUrlAsBase64DataUri(f.url);
-          if (dataUri) {
-            extraRules.push(
-              `@font-face { font-family: '${f.family}'; font-style: normal; font-weight: ${f.weight}; src: url(${dataUri}) format('woff2'); }`
-            );
-          }
-        } catch {}
-      })
-    );
-  }
-  return [googleCss, ...extraRules].join('\n');
-}
-
-// Warm up fonts in background immediately when module loads
-if (typeof window !== 'undefined') {
-  setTimeout(() => {
-    getPrewarmedGoogleFontEmbedCss();
-  }, 50);
-}
-
-function loadDecodedImage(src: string): Promise<HTMLImageElement | null> {
-  if (!src) return Promise.resolve(null);
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      if (img.decode) {
-        img
-          .decode()
-          .then(() => resolve(img))
-          .catch(() => resolve(img));
-      } else {
-        resolve(img);
-      }
-    };
-    img.onerror = () => resolve(null);
-    img.src = src;
-  });
-}
+import {
+  exportTrueVectorPdfReport,
+  renderTrueVectorCanvasPage,
+} from '../services/vectorPdfGenerator';
 
 interface PrintPreviewModalProps {
   isOpen: boolean;
@@ -293,15 +143,18 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   };
   const activeModalityColor = getModalityColorHex(primaryModality);
 
-  // Format font-family safely and ALWAYS append loaded Google Web Fonts ('Vazirmatn', 'Lalezar', 'Amiri') so host systems without local fonts (B Titr, B Nazanin, etc.) never scramble layout
+  // Format font-family safely: ALWAYS prepend 'TimesNewRomanLatin' (so all English words/terms inside Persian or English reports render in Times New Roman) and append loaded Persian web fonts
   const formatCssFontStack = (fontVal: string) => {
     const trimmed = (fontVal || "'Vazirmatn', sans-serif").trim();
     const cleanName = trimmed.replace(/['"]/g, '').split(',')[0].trim();
     if (!cleanName || cleanName.toLowerCase() === 'vazirmatn') {
-      return "'Vazirmatn', 'Noto Naskh Arabic', Tahoma, sans-serif";
+      return "'TimesNewRomanLatin', 'Vazirmatn', 'Times New Roman', 'Noto Naskh Arabic', Tahoma, serif";
+    }
+    if (cleanName.toLowerCase().includes('times')) {
+      return "'TimesNewRomanLatin', 'Times New Roman', 'Vazirmatn', serif";
     }
     if (cleanName.toLowerCase().includes('titr') || cleanName.toLowerCase().includes('lalezar')) {
-      return `'${cleanName}', 'Lalezar', 'Vazirmatn', Tahoma, sans-serif`;
+      return `'TimesNewRomanLatin', '${cleanName}', 'Lalezar', 'Vazirmatn', 'Times New Roman', Tahoma, sans-serif`;
     }
     if (
       cleanName.toLowerCase().includes('nazanin') ||
@@ -311,9 +164,9 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
       cleanName.toLowerCase().includes('lotus') ||
       cleanName.toLowerCase().includes('mitra')
     ) {
-      return `'${cleanName}', 'Amiri', 'Noto Naskh Arabic', 'Vazirmatn', Tahoma, serif`;
+      return `'TimesNewRomanLatin', '${cleanName}', 'Amiri', 'Noto Naskh Arabic', 'Vazirmatn', 'Times New Roman', Tahoma, serif`;
     }
-    return `'${cleanName}', 'Vazirmatn', 'Noto Naskh Arabic', Tahoma, sans-serif`;
+    return `'TimesNewRomanLatin', '${cleanName}', 'Vazirmatn', 'Times New Roman', 'Noto Naskh Arabic', Tahoma, sans-serif`;
   };
 
   const resolvedHeaderFontCss = formatCssFontStack(headerFont);
@@ -733,120 +586,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Shared ultra-fast, true-vector High-DPI Canvas Renderer for both PNG and PDF exports
-  const renderSheetToHighResCanvas = async (
-    sheetEl: HTMLElement,
-    scale = 2.6
-  ): Promise<HTMLCanvasElement> => {
-    const width = sheetEl.clientWidth || 794;
-    const height = sheetEl.clientHeight || 1123;
-    const targetWidth = Math.round(width * scale);
-    const targetHeight = Math.round(height * scale);
-
-    // 1. Get pre-cached embedded @font-face CSS (0ms after warm-up) + decode any images in parallel
-    const [fontEmbedCSS, watermarkImg] = await Promise.all([
-      getFastEmbeddedFontCss([
-        resolvedHeaderFontCss,
-        resolvedHeadingFontCss,
-        resolvedBodyFontCss,
-        resolvedDoctorStampFontCss,
-      ]),
-      !preprintedLetterheadMode && effectiveLogoUrl
-        ? loadDecodedImage(effectiveLogoUrl)
-        : Promise.resolve(null),
-    ]);
-
-    // 2. Generate SVG via html-to-image (skipping stylesheet crawling via fontEmbedCSS, and excluding DOM watermark so we composite it natively)
-    const rawSvgDataUrl = await toSvg(sheetEl, {
-      width,
-      height,
-      fontEmbedCSS,
-      cacheBust: false,
-      filter: (node: HTMLElement) => {
-        if (node?.classList?.contains('a4-watermark-logo')) return false;
-        if (node?.classList?.contains('no-print')) return false;
-        return true;
-      },
-      style: {
-        animation: 'none',
-        transform: 'none',
-        opacity: '1',
-        borderRadius: '0px',
-        boxShadow: 'none',
-        margin: '0',
-        backgroundColor: '#ffffff',
-        color: '#090d16',
-        WebkitFontSmoothing: 'antialiased',
-      } as Partial<CSSStyleDeclaration>,
-    });
-
-    // 3. Fix Chromium <foreignObject> 1x upscaling bug:
-    // By setting the root <svg> width/height to targetWidth/targetHeight while keeping viewBox="0 0 width height",
-    // Chromium's Skia engine rasterizes all fonts inside <foreignObject> at true 2.6x vector resolution (~250 DPI)!
-    // Also restore integer font-sizes that html-to-image reduced by 0.1px (e.g. 13.9px -> 14px).
-    const commaIdx = rawSvgDataUrl.indexOf(',');
-    let finalSvgDataUrl = rawSvgDataUrl;
-    if (commaIdx !== -1) {
-      let svgMarkup = decodeURIComponent(rawSvgDataUrl.slice(commaIdx + 1));
-      svgMarkup = svgMarkup
-        .replace(
-          new RegExp(`width="${width}"\\s+height="${height}"`),
-          `width="${targetWidth}" height="${targetHeight}"`
-        )
-        .replace(/font-size:\s*(\d+)\.9px/g, (_m, d) => `font-size: ${Number(d) + 1}px`);
-      finalSvgDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgMarkup)}`;
-    }
-
-    const renderedSheetImg = await loadDecodedImage(finalSvgDataUrl);
-
-    const canvas = document.createElement('canvas');
-    canvas.width = targetWidth;
-    canvas.height = targetHeight;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return canvas;
-
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-
-    // Layer 1: Pure White Paper Background
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, targetWidth, targetHeight);
-
-    // Layer 2: Crisp Vector-Rasterized Report Sheet
-    if (renderedSheetImg) {
-      ctx.drawImage(renderedSheetImg, 0, 0, targetWidth, targetHeight);
-    }
-
-    // Layer 3: Centered Clinic Logo Watermark drawn with 'multiply' blend mode
-    // ('multiply' tints white background areas at 6.5% opacity while keeping dark text 100% black and sharp!)
-    if (watermarkImg && !preprintedLetterheadMode) {
-      ctx.save();
-      ctx.globalCompositeOperation = 'multiply';
-      ctx.globalAlpha = 0.065;
-      if (monochromePrintMode) {
-        ctx.filter = 'grayscale(100%)';
-      }
-      const maxWmSize = Math.round(targetWidth * 0.44);
-      const natW = watermarkImg.naturalWidth || 800;
-      const natH = watermarkImg.naturalHeight || 922;
-      const aspect = natW / natH;
-      let wmW = maxWmSize;
-      let wmH = maxWmSize;
-      if (aspect >= 1) {
-        wmH = Math.round(maxWmSize / aspect);
-      } else {
-        wmW = Math.round(maxWmSize * aspect);
-      }
-      const wmX = Math.round((targetWidth - wmW) / 2);
-      const wmY = Math.round((targetHeight - wmH) / 2);
-      ctx.drawImage(watermarkImg, wmX, wmY, wmW, wmH);
-      ctx.restore();
-    }
-
-    return canvas;
-  };
-
-  // Multi-Page High-Resolution A4 PNG Image Export
+  // Multi-Page True 300-DPI Native Canvas A4 PNG Export (Zero <foreignObject> blur or disconnected letters)
   const handleExportPngImage = async () => {
     if (isExportingImage || isExportingPdf) return;
     setIsExportingImage(true);
@@ -861,10 +601,35 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
       }`;
 
       for (let i = 0; i < total; i++) {
-        const sheetEl = pageRefs.current[i];
-        if (!sheetEl) continue;
+        const sheet = paginationResult.pages[i];
+        if (!sheet) continue;
 
-        const canvas = await renderSheetToHighResCanvas(sheetEl, 2.6);
+        const canvas = await renderTrueVectorCanvasPage({
+          patientInfo,
+          studies,
+          doctor,
+          settings,
+          sheet,
+          totalPages: total,
+          effectiveLogoUrl,
+          effectiveSignatureUrl,
+          qrDataUrl,
+          qrMode,
+          monochromePrintMode,
+          preprintedLetterheadMode,
+          preprintedTopMarginMm,
+          headerFontCss: resolvedHeaderFontCss,
+          headerFontSize,
+          headingFontCss: resolvedHeadingFontCss,
+          headingFontSize,
+          bodyFontCss: resolvedBodyFontCss,
+          bodyFontSize: bodyFontSize || 14,
+          doctorStampFontCss: resolvedDoctorStampFontCss,
+          doctorStampFontSize: resolvedDoctorStampFontSize,
+          lineHeight: unifiedLineHeight,
+          dpiScale: 11.811, // True 300 DPI (2480 x 3508 px)
+        });
+
         const blob = await new Promise<Blob | null>((resolve) =>
           canvas.toBlob((b) => resolve(b), 'image/png')
         );
@@ -882,8 +647,8 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
 
       setShareFeedback(
         total > 1
-          ? `✓ ${total} برگه تصویر باکیفیت PNG (برگه ۱ تا ${total}) با فونت شارپ دانلود شد.`
-          : '✓ تصویر باکیفیت و شارپ PNG برگه گزارش دانلود شد.'
+          ? `✓ ${total} برگه تصویر ۳۰۰ DPI واقعی PNG (برگه ۱ تا ${total}) با فونت کاملاً پیوسته و شارپ دانلود شد.`
+          : '✓ تصویر ۳۰۰ DPI واقعی PNG برگه گزارش با فونت کاملاً پیوسته و شارپ دانلود شد.'
       );
       setTimeout(() => setShareFeedback(''), 4000);
     } catch (err) {
@@ -893,7 +658,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
     }
   };
 
-  // Direct Multi-Page A4 PDF File Download (uses high-DPI JPEG stream for instant <250ms PDF generation with watermark & sharp fonts)
+  // Direct Multi-Page True Vector A4 PDF File Download (100% Vector Text & Shapes, NOT a rasterized image!)
   const handleExportPdfFile = async () => {
     if (isExportingPdf || isExportingImage) return;
     setIsExportingPdf(true);
@@ -903,40 +668,32 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
       }
 
       const total = paginationResult.totalPages;
-      const baseName = `Report_PDF_${patientInfo.nationalId || patientInfo.admissionNumber || 'Radiology'}_${
-        patientInfo.fullName || 'Patient'
-      }`;
-
-      const pdf = new jsPDF({
-        orientation: 'portrait',
-        unit: 'mm',
-        format: 'a4',
-        compress: true,
+      await exportTrueVectorPdfReport({
+        patientInfo,
+        studies,
+        doctor,
+        settings,
+        pages: paginationResult.pages,
+        totalPages: total,
+        effectiveLogoUrl,
+        effectiveSignatureUrl,
+        qrDataUrl,
+        qrMode,
+        monochromePrintMode,
+        preprintedLetterheadMode,
+        preprintedTopMarginMm,
+        headerFontSize,
+        headingFontSize,
+        bodyFontSize: bodyFontSize || 14,
+        lineHeight: unifiedLineHeight,
       });
 
-      let addedPages = 0;
-      for (let i = 0; i < total; i++) {
-        const sheetEl = pageRefs.current[i];
-        if (!sheetEl) continue;
-
-        const canvas = await renderSheetToHighResCanvas(sheetEl, 2.6);
-        const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.98);
-        if (addedPages > 0) {
-          pdf.addPage('a4', 'portrait');
-        }
-        pdf.addImage(jpegDataUrl, 'JPEG', 0, 0, 210, 297);
-        addedPages++;
-      }
-
-      if (addedPages > 0) {
-        pdf.save(`${baseName}.pdf`);
-        setShareFeedback(
-          total > 1
-            ? `✓ فایل PDF چندبرگه‌ای گزارش (${total} صفحه A4) با موفقیت دانلود شد.`
-            : '✓ فایل PDF باکیفیت گزارش (A4) با موفقیت دانلود شد.'
-        );
-        setTimeout(() => setShareFeedback(''), 4000);
-      }
+      setShareFeedback(
+        total > 1
+          ? `✓ فایل PDF وکتور واقعی (${total} صفحه A4 با قابلیت انتخاب متن و زوم بی‌نهایت) دانلود شد.`
+          : '✓ فایل PDF وکتور واقعی (A4 با قابلیت انتخاب متن و فونت Times New Roman / وزیرمتن) دانلود شد.'
+      );
+      setTimeout(() => setShareFeedback(''), 4000);
     } catch (err) {
       console.warn('PDF export warning:', err);
       handleDownloadPrintHtml();
@@ -973,10 +730,34 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
         printAreaRef.current.innerText.slice(0, 700),
       ].join('\n');
 
-      const firstSheet = pageRefs.current[0] || printAreaRef.current;
+      const firstSheet = paginationResult.pages[0];
       if (typeof navigator !== 'undefined' && navigator.share && firstSheet) {
         try {
-          const canvas = await renderSheetToHighResCanvas(firstSheet, 2.2);
+          const canvas = await renderTrueVectorCanvasPage({
+            patientInfo,
+            studies,
+            doctor,
+            settings,
+            sheet: firstSheet,
+            totalPages: paginationResult.totalPages,
+            effectiveLogoUrl,
+            effectiveSignatureUrl,
+            qrDataUrl,
+            qrMode,
+            monochromePrintMode,
+            preprintedLetterheadMode,
+            preprintedTopMarginMm,
+            headerFontCss: resolvedHeaderFontCss,
+            headerFontSize,
+            headingFontCss: resolvedHeadingFontCss,
+            headingFontSize,
+            bodyFontCss: resolvedBodyFontCss,
+            bodyFontSize: bodyFontSize || 14,
+            doctorStampFontCss: resolvedDoctorStampFontCss,
+            doctorStampFontSize: resolvedDoctorStampFontSize,
+            lineHeight: unifiedLineHeight,
+            dpiScale: 10,
+          });
           const blob = await new Promise<Blob | null>((resolve) =>
             canvas.toBlob((b) => resolve(b), 'image/png')
           );
@@ -1423,7 +1204,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                           />
                           <div className="space-y-1">
                             <h1
-                              className="font-black text-slate-950 tracking-tight leading-snug"
+                              className="font-black text-slate-950 leading-snug"
                               style={{
                                 fontFamily: resolvedHeaderFontCss,
                                 fontSize: `${headerFontSize}px`,
@@ -1617,7 +1398,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                               <div
                                 dir={studyDir}
                                 className={`printable-findings-content prose max-w-none text-slate-950 font-medium ${
-                                  isLtr ? 'text-left' : 'text-justify'
+                                  isLtr ? 'text-left' : 'text-right'
                                 }`}
                                 style={{
                                   fontFamily: resolvedBodyFontCss,
@@ -1625,7 +1406,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                                   lineHeight: unifiedLineHeight,
                                   color: '#050811',
                                   direction: studyDir,
-                                  textAlign: isLtr ? 'left' : 'justify',
+                                  textAlign: isLtr ? 'left' : 'right',
                                 }}
                                 dangerouslySetInnerHTML={{
                                   __html: stripSpellHighlights(slice.findingsHtmlSlice, true),

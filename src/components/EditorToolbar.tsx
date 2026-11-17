@@ -90,7 +90,14 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
   const [showLineHeightMenu, setShowLineHeightMenu] = useState(false);
   const [activeTextColor, setActiveTextColor] = useState<string>('#0f172a');
   const [activeHighlightColor, setActiveHighlightColor] = useState<string>('#fef08a');
+  const [selectedToolbarFont, setSelectedToolbarFont] = useState<string>(defaultFont || 'Vazirmatn');
   const [isFloatingCollapsed, setIsFloatingCollapsed] = useState(false);
+
+  React.useEffect(() => {
+    if (defaultFont) {
+      setSelectedToolbarFont(defaultFont);
+    }
+  }, [defaultFont]);
   const [floatingOffset, setFloatingOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const dragStartRef = React.useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
   const colorMenuRef = React.useRef<HTMLDivElement | null>(null);
@@ -332,20 +339,21 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
           </button>
         </div>
 
-        {/* Font Family Selector */}
+        {/* Font Family Selector (Applies only to selected text / current line, never overwrites whole report font) */}
         <div className="flex items-center gap-1 border-l border-slate-200 pl-1.5 ml-1">
           <select
-            value={defaultFont || 'Vazirmatn'}
+            value={selectedToolbarFont}
             onChange={(e) => {
               if (e.target.value === '__add_font__') {
                 if (onOpenFontManager) onOpenFontManager();
               } else {
-                onExecCommand('fontName', e.target.value);
-                if (onChangeDefaultFont) onChangeDefaultFont(e.target.value);
+                const chosenFont = e.target.value;
+                setSelectedToolbarFont(chosenFont);
+                onExecCommand('fontName', chosenFont);
               }
             }}
             className="text-xs py-1 px-2 rounded border border-slate-200 bg-slate-50 focus:border-teal-500 focus:outline-none"
-            title="قلم پیش‌فرض متن گزارش"
+            title="تغییر قلم بخش یا سطر انتخابی (بدون تغییر قلم کل گزارش)"
           >
             {availableFonts.map((f, idx) => (
               <option key={idx} value={f.value}>
@@ -370,13 +378,13 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
           )}
         </div>
 
-        {/* Font Size Selector */}
+        {/* Font Size Selector (Applies only to selected text / current line) */}
         <div className="flex items-center border-l border-slate-200 pl-1.5 ml-1">
           <select
             onChange={(e) => onExecCommand('fontSize', e.target.value)}
             className="text-xs py-1 px-2 rounded border border-slate-200 bg-slate-50 focus:border-teal-500 focus:outline-none"
             defaultValue="3"
-            title="اندازه قلم"
+            title="تغییر اندازه قلم بخش یا سطر انتخابی"
           >
             {fontSizes.map((s) => (
               <option key={s.value} value={s.value}>
@@ -558,14 +566,14 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
           </div>
         </div>
 
-        {/* Text Alignments + RTL/LTR Direction Switcher */}
+        {/* Text Alignments + Partial/Line RTL & LTR Direction Switcher */}
         <div className="flex items-center gap-0.5 border-l border-slate-200 pl-1.5 ml-1">
           <button
             type="button"
             onMouseDown={preventFocusLoss}
             onClick={() => onExecCommand('justifyRight')}
             className="p-1.5 text-slate-700 hover:bg-slate-100 rounded cursor-pointer"
-            title="راست‌چین"
+            title="راست‌چین کردن سطر انتخابی"
           >
             <AlignRight className="w-3.5 h-3.5" />
           </button>
@@ -574,7 +582,7 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
             onMouseDown={preventFocusLoss}
             onClick={() => onExecCommand('justifyCenter')}
             className="p-1.5 text-slate-700 hover:bg-slate-100 rounded cursor-pointer"
-            title="وسط‌چین"
+            title="وسط‌چین کردن سطر انتخابی"
           >
             <AlignCenter className="w-3.5 h-3.5" />
           </button>
@@ -583,7 +591,7 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
             onMouseDown={preventFocusLoss}
             onClick={() => onExecCommand('justifyLeft')}
             className="p-1.5 text-slate-700 hover:bg-slate-100 rounded cursor-pointer"
-            title="چپ‌چین"
+            title="چپ‌چین کردن سطر انتخابی"
           >
             <AlignLeft className="w-3.5 h-3.5" />
           </button>
@@ -592,22 +600,27 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
             onMouseDown={preventFocusLoss}
             onClick={() => onExecCommand('justifyFull')}
             className="p-1.5 text-slate-700 hover:bg-slate-100 rounded cursor-pointer"
-            title="تراز دوطرفه (Justify)"
+            title="تراز دوطرفه سطر انتخابی (Justify)"
           >
             <AlignJustify className="w-3.5 h-3.5" />
           </button>
           <button
             type="button"
             onMouseDown={preventFocusLoss}
-            onClick={onToggleDirection}
-            className={`px-1.5 py-0.5 mr-0.5 text-[11px] font-bold rounded flex items-center gap-1 transition-colors cursor-pointer ${
-              activeDirection === 'rtl'
-                ? 'bg-teal-50 text-teal-700 border border-teal-200'
-                : 'bg-slate-100 text-slate-700 border border-slate-200'
-            }`}
-            title="تغییر جهت نوشتار (راست‌به‌چپ فارسی / چپ‌به‌راست انگلیسی)"
+            onClick={() => onExecCommand('setDirection', 'rtl')}
+            className="px-1.5 py-0.5 mr-0.5 text-[10.5px] font-bold rounded bg-teal-50 hover:bg-teal-600 text-teal-800 hover:text-white border border-teal-200 transition-colors cursor-pointer"
+            title="راست‌به‌چپ کردن بخش یا سطر انتخابی (فارسی - RTL بدون جابجایی بقیه متن)"
           >
-            <span>{activeDirection === 'rtl' ? 'RTL' : 'LTR'}</span>
+            RTL
+          </button>
+          <button
+            type="button"
+            onMouseDown={preventFocusLoss}
+            onClick={() => onExecCommand('setDirection', 'ltr')}
+            className="px-1.5 py-0.5 text-[10.5px] font-bold rounded bg-slate-100 hover:bg-indigo-600 text-slate-700 hover:text-white border border-slate-200 transition-colors cursor-pointer"
+            title="چپ‌به‌راست کردن بخش یا سطر انتخابی (انگلیسی - LTR بدون جابجایی بقیه متن)"
+          >
+            LTR
           </button>
         </div>
 
