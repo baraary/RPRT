@@ -1,5 +1,9 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
+import os from 'os';
+import crypto from 'crypto';
+import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
@@ -262,10 +266,6 @@ ${fullReport}
 });
 
 // Multi-Typist Local Network (LAN) Shared SQLite Database Sync Endpoints
-import fs from 'fs';
-import os from 'os';
-import { createRequire } from 'module';
-
 const requireModule = createRequire(import.meta.url);
 const LAN_DATA_DIR = path.join(__dirname, 'data');
 const LAN_SQLITE_FILE = path.join(LAN_DATA_DIR, 'radioreport_lan.sqlite');
@@ -342,6 +342,8 @@ function readLanDb(): any {
         doctors: [],
         typists: [],
         shortcuts: [],
+        referringPhysicians: [],
+        settings: null,
       };
       for (const row of rows) {
         try {
@@ -377,7 +379,15 @@ function readLanDb(): any {
       return JSON.parse(fs.readFileSync(LAN_JSON_FALLBACK_FILE, 'utf-8'));
     }
   } catch {}
-  return { reports: [], templates: [], doctors: [], typists: [], shortcuts: [] };
+  return {
+    reports: [],
+    templates: [],
+    doctors: [],
+    typists: [],
+    shortcuts: [],
+    referringPhysicians: [],
+    settings: null,
+  };
 }
 
 function writeLanDb(data: any): void {
@@ -410,10 +420,13 @@ function writeLanDb(data: any): void {
       `);
 
       const tx = db.transaction(() => {
-        for (const key of ['reports', 'templates', 'doctors', 'typists', 'shortcuts']) {
+        for (const key of ['reports', 'templates', 'doctors', 'typists', 'shortcuts', 'referringPhysicians']) {
           if (Array.isArray(data[key])) {
             upsertCol.run(key, JSON.stringify(data[key]), nowIso);
           }
+        }
+        if (data.settings && typeof data.settings === 'object') {
+          upsertCol.run('settings', JSON.stringify(data.settings), nowIso);
         }
         if (Array.isArray(data.reports)) {
           for (const rep of data.reports) {
@@ -450,19 +463,20 @@ function writeLanDb(data: any): void {
 
 function mergeById(serverList: any[] = [], clientList: any[] = []): any[] {
   const map = new Map<string, any>();
-  for (const item of serverList) {
-    if (item && item.id) map.set(item.id, item);
+  for (const item of serverList || []) {
+    if (item && item.id) map.set(String(item.id), item);
   }
-  for (const item of clientList) {
+  for (const item of clientList || []) {
     if (item && item.id) {
-      const existing = map.get(item.id);
+      const key = String(item.id);
+      const existing = map.get(key);
       if (!existing) {
-        map.set(item.id, item);
+        map.set(key, item);
       } else {
         const existingTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
         const clientTime = item.updatedAt ? new Date(item.updatedAt).getTime() : 0;
         if (clientTime >= existingTime) {
-          map.set(item.id, {
+          map.set(key, {
             ...existing,
             ...item,
             usageCount: Math.max(existing.usageCount || 0, item.usageCount || 0),
@@ -472,6 +486,29 @@ function mergeById(serverList: any[] = [], clientList: any[] = []): any[] {
     }
   }
   return Array.from(map.values());
+}
+
+function mergeSettingsObjects(remoteSettings: any, localSettings: any): any {
+  if (!remoteSettings || typeof remoteSettings !== 'object') return localSettings || null;
+  if (!localSettings || typeof localSettings !== 'object') return remoteSettings;
+  const mergedDictionary = mergeById(
+    Array.isArray(remoteSettings.customDictionary) ? remoteSettings.customDictionary : [],
+    Array.isArray(localSettings.customDictionary) ? localSettings.customDictionary : []
+  );
+  const mergedFonts = mergeById(
+    Array.isArray(remoteSettings.customFonts) ? remoteSettings.customFonts : [],
+    Array.isArray(localSettings.customFonts) ? localSettings.customFonts : []
+  );
+  return {
+    ...remoteSettings,
+    ...localSettings,
+    customDictionary: mergedDictionary,
+    customFonts: mergedFonts.length > 0 ? mergedFonts : localSettings.customFonts || remoteSettings.customFonts,
+    modalityColors: {
+      ...(remoteSettings.modalityColors || {}),
+      ...(localSettings.modalityColors || {}),
+    },
+  };
 }
 
 app.get('/api/lan/status', (req, res) => {
@@ -496,6 +533,7 @@ app.get('/api/lan/status', (req, res) => {
 app.get('/api/lan/sync', (req, res) => {
   const db = readLanDb();
   res.json({
+    ok: true,
     ...db,
     engine: sqliteDb ? 'SQLite' : 'JSON',
     lanUrls: getLocalLanIpAddresses().map((ip) => `http://${ip}:${port}`),
@@ -506,7 +544,7 @@ app.get('/api/lan/sync', (req, res) => {
 app.post('/api/lan/sync', (req, res) => {
   try {
     const currentDb = readLanDb();
-    const { reports, templates, doctors, typists, shortcuts } = req.body || {};
+    const { reports, templates, doctors, typists, shortcuts, referringPhysicians, settings } = req.body || {};
 
     const merged = {
       reports: mergeById(currentDb.reports, reports).sort(
@@ -518,18 +556,548 @@ app.post('/api/lan/sync', (req, res) => {
       doctors: mergeById(currentDb.doctors, doctors),
       typists: mergeById(currentDb.typists, typists),
       shortcuts: mergeById(currentDb.shortcuts, shortcuts),
+      referringPhysicians: mergeById(currentDb.referringPhysicians, referringPhysicians),
+      settings: mergeSettingsObjects(currentDb.settings, settings),
       updatedAt: new Date().toISOString(),
     };
 
     writeLanDb(merged);
     res.json({
+      ok: true,
       ...merged,
       engine: sqliteDb ? 'SQLite (radioreport_lan.sqlite)' : 'JSON',
       lanUrls: getLocalLanIpAddresses().map((ip) => `http://${ip}:${port}`),
       timestamp: merged.updatedAt,
     });
   } catch (err) {
-    res.status(200).json({ ...readLanDb(), timestamp: new Date().toISOString() });
+    console.error('LAN sync error:', err);
+    res.status(500).json({
+      ok: false,
+      error: 'خطا در همگام‌سازی پایگاه داده محلی',
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
+
+// ============================================================================
+// GitHub OAuth + Private Secret Gist Cloud Sync Endpoints
+// ============================================================================
+const GITHUB_BACKUP_FILENAME = 'radioreport-sync-backup.json';
+const GITHUB_GIST_DESCRIPTION = 'RadioReport Cloud Sync Backup (Private)';
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+const GITHUB_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+
+interface GitHubSessionRecord {
+  accessToken: string;
+  user: {
+    login: string;
+    name: string;
+    avatarUrl: string;
+  };
+  gistId?: string;
+  gistUrl?: string;
+  createdAt: number;
+}
+
+const githubOAuthStates = new Map<string, { createdAt: number }>();
+const githubSessions = new Map<string, GitHubSessionRecord>();
+
+function cleanupExpiredGitHubMaps(): void {
+  const now = Date.now();
+  for (const [k, v] of githubOAuthStates.entries()) {
+    if (now - v.createdAt > OAUTH_STATE_TTL_MS) {
+      githubOAuthStates.delete(k);
+    }
+  }
+  for (const [k, v] of githubSessions.entries()) {
+    if (now - v.createdAt > GITHUB_SESSION_TTL_MS) {
+      githubSessions.delete(k);
+    }
+  }
+}
+
+function getGitHubOAuthConfig(): { clientId: string; clientSecret: string; configured: boolean } {
+  const clientId = (process.env.GITHUB_CLIENT_ID || '').trim();
+  const clientSecret = (process.env.GITHUB_CLIENT_SECRET || '').trim();
+  const configured =
+    Boolean(clientId) &&
+    Boolean(clientSecret) &&
+    clientId !== 'MY_GITHUB_CLIENT_ID' &&
+    clientSecret !== 'MY_GITHUB_CLIENT_SECRET';
+  return { clientId, clientSecret, configured };
+}
+
+function resolvePublicBaseUrl(req: express.Request): string {
+  const envUrl = (process.env.APP_URL || '').trim().replace(/\/+$/, '');
+  if (envUrl && envUrl !== 'MY_APP_URL' && /^https?:\/\//i.test(envUrl)) {
+    return envUrl;
+  }
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+  const proto = forwardedProto || req.protocol || 'http';
+  const forwardedHost = String(req.headers['x-forwarded-host'] || '').split(',')[0].trim();
+  const host = forwardedHost || req.get('host') || `localhost:${port}`;
+  return `${proto}://${host}`.replace(/\/+$/, '');
+}
+
+function getGitHubSessionFromReq(req: express.Request): { token: string; session: GitHubSessionRecord } | null {
+  cleanupExpiredGitHubMaps();
+  const authHeader = String(req.headers.authorization || '').trim();
+  if (!authHeader.startsWith('Bearer ')) return null;
+  const token = authHeader.slice(7).trim();
+  if (!token) return null;
+  const session = githubSessions.get(token);
+  if (!session) return null;
+  return { token, session };
+}
+
+async function githubApiFetch(
+  targetUrl: string,
+  accessToken: string,
+  init: RequestInit = {}
+): Promise<Response> {
+  const parsed = new URL(targetUrl);
+  const allowedHosts = new Set(['api.github.com', 'gist.githubusercontent.com']);
+  if (parsed.protocol !== 'https:' || !allowedHosts.has(parsed.hostname)) {
+    throw new Error('Blocked non-GitHub request URL');
+  }
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${accessToken}`,
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': 'RadioReport-CloudSync',
+    ...(init.headers as Record<string, string> | undefined),
+  };
+  return fetch(parsed.toString(), { ...init, headers });
+}
+
+function escapeJsonForInlineScript(payload: unknown): string {
+  return JSON.stringify(payload)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
+function sendGitHubOAuthPopupHtml(res: express.Response, payload: Record<string, unknown>, isSuccess: boolean): void {
+  const safeJson = escapeJsonForInlineScript(payload);
+  const titleText = isSuccess ? 'اتصال به گیت‌هاب با موفقیت انجام شد' : 'خطا در اتصال به گیت‌هاب';
+  const descText = isSuccess
+    ? 'این پنجره به صورت خودکار بسته می‌شود. می‌توانید به صفحه رادیورپورت برگردید.'
+    : 'لطفاً این پنجره را ببندید و دوباره تلاش کنید.';
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <title>${titleText}</title>
+  <style>
+    body { font-family: Tahoma, sans-serif; background: #f8fafc; color: #0f172a; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 24px; text-align: center; }
+    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 24px 28px; max-width: 420px; box-shadow: 0 10px 30px rgba(15,23,42,0.08); }
+    h2 { margin: 0 0 8px; font-size: 16px; color: ${isSuccess ? '#0f766e' : '#be123c'}; }
+    p { margin: 0; font-size: 13px; color: #475569; line-height: 1.7; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>${titleText}</h2>
+    <p>${descText}</p>
+  </div>
+  <script>
+    (function () {
+      var data = ${safeJson};
+      try {
+        if (window.opener && !window.opener.closed) {
+          window.opener.postMessage(data, '*');
+        }
+      } catch (e) {}
+      setTimeout(function () { window.close(); }, 350);
+    })();
+  </script>
+</body>
+</html>`);
+}
+
+app.get('/api/github/auth-url', (req, res) => {
+  cleanupExpiredGitHubMaps();
+  const { clientId, configured } = getGitHubOAuthConfig();
+  const callbackUrl = `${resolvePublicBaseUrl(req)}/api/github/callback`;
+  if (!configured) {
+    return res.json({
+      configured: false,
+      callbackUrl,
+      error: 'متغیرهای GITHUB_CLIENT_ID و GITHUB_CLIENT_SECRET در تنظیمات سرور ثبت نشده‌اند.',
+    });
+  }
+
+  const state = crypto.randomBytes(24).toString('hex');
+  githubOAuthStates.set(state, { createdAt: Date.now() });
+
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: callbackUrl,
+    scope: 'gist',
+    state,
+  });
+
+  res.json({
+    configured: true,
+    url: `https://github.com/login/oauth/authorize?${params.toString()}`,
+    callbackUrl,
+  });
+});
+
+app.get(['/api/github/callback', '/api/github/callback/'], async (req, res) => {
+  cleanupExpiredGitHubMaps();
+  const { clientId, clientSecret, configured } = getGitHubOAuthConfig();
+  const code = typeof req.query.code === 'string' ? req.query.code : '';
+  const state = typeof req.query.state === 'string' ? req.query.state : '';
+  const oauthError = typeof req.query.error === 'string' ? req.query.error : '';
+
+  if (oauthError) {
+    return sendGitHubOAuthPopupHtml(
+      res,
+      { type: 'GITHUB_OAUTH_ERROR', error: 'دسترسی گیت‌هاب توسط کاربر لغو شد.' },
+      false
+    );
+  }
+
+  if (!configured) {
+    return sendGitHubOAuthPopupHtml(
+      res,
+      { type: 'GITHUB_OAUTH_ERROR', error: 'پیکربندی OAuth گیت‌هاب روی سرور کامل نیست.' },
+      false
+    );
+  }
+
+  if (!state || !githubOAuthStates.has(state)) {
+    return sendGitHubOAuthPopupHtml(
+      res,
+      { type: 'GITHUB_OAUTH_ERROR', error: 'شناسه امنیتی درخواست (state) نامعتبر یا منقضی شده است.' },
+      false
+    );
+  }
+  githubOAuthStates.delete(state);
+
+  if (!code) {
+    return sendGitHubOAuthPopupHtml(
+      res,
+      { type: 'GITHUB_OAUTH_ERROR', error: 'کد تایید گیت‌هاب دریافت نشد.' },
+      false
+    );
+  }
+
+  try {
+    const callbackUrl = `${resolvePublicBaseUrl(req)}/api/github/callback`;
+    const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'User-Agent': 'RadioReport-CloudSync',
+      },
+      body: JSON.stringify({
+        client_id: clientId,
+        client_secret: clientSecret,
+        code,
+        redirect_uri: callbackUrl,
+      }),
+    });
+
+    const tokenJson: any = await tokenRes.json();
+    if (!tokenRes.ok || !tokenJson.access_token) {
+      return sendGitHubOAuthPopupHtml(
+        res,
+        {
+          type: 'GITHUB_OAUTH_ERROR',
+          error: 'دریافت توکن دسترسی از گیت‌هاب ناموفق بود.',
+        },
+        false
+      );
+    }
+
+    const accessToken = String(tokenJson.access_token);
+    const userRes = await githubApiFetch('https://api.github.com/user', accessToken);
+    if (!userRes.ok) {
+      return sendGitHubOAuthPopupHtml(
+        res,
+        { type: 'GITHUB_OAUTH_ERROR', error: 'خواندن اطلاعات حساب گیت‌هاب ناموفق بود.' },
+        false
+      );
+    }
+
+    const ghUser: any = await userRes.json();
+    const userProfile = {
+      login: String(ghUser.login || 'github-user'),
+      name: String(ghUser.name || ghUser.login || 'کاربر گیت‌هاب'),
+      avatarUrl: String(ghUser.avatar_url || ''),
+    };
+
+    const sessionToken = crypto.randomBytes(32).toString('hex');
+    githubSessions.set(sessionToken, {
+      accessToken,
+      user: userProfile,
+      createdAt: Date.now(),
+    });
+
+    return sendGitHubOAuthPopupHtml(
+      res,
+      {
+        type: 'GITHUB_OAUTH_SUCCESS',
+        sessionToken,
+        user: userProfile,
+      },
+      true
+    );
+  } catch (err) {
+    console.error('GitHub OAuth callback error:', err);
+    return sendGitHubOAuthPopupHtml(
+      res,
+      { type: 'GITHUB_OAUTH_ERROR', error: 'خطای ارتباطی با سرور گیت‌هاب.' },
+      false
+    );
+  }
+});
+
+app.get('/api/github/status', (req, res) => {
+  const { configured } = getGitHubOAuthConfig();
+  const callbackUrl = `${resolvePublicBaseUrl(req)}/api/github/callback`;
+  const found = getGitHubSessionFromReq(req);
+  if (!found) {
+    return res.json({
+      configured,
+      connected: false,
+      callbackUrl,
+    });
+  }
+  return res.json({
+    configured,
+    connected: true,
+    user: found.session.user,
+    gistUrl: found.session.gistUrl || '',
+    callbackUrl,
+  });
+});
+
+app.post('/api/github/disconnect', (req, res) => {
+  const found = getGitHubSessionFromReq(req);
+  if (found) {
+    githubSessions.delete(found.token);
+  }
+  res.json({ ok: true });
+});
+
+async function findRadioReportGist(
+  session: GitHubSessionRecord
+): Promise<{ id: string; htmlUrl: string; rawData: any | null } | null> {
+  const extractGistData = async (gistObj: any): Promise<any | null> => {
+    const fileEntry = gistObj?.files?.[GITHUB_BACKUP_FILENAME];
+    if (!fileEntry) return null;
+    try {
+      if (fileEntry.truncated && typeof fileEntry.raw_url === 'string') {
+        const rawRes = await githubApiFetch(fileEntry.raw_url, session.accessToken);
+        if (rawRes.ok) {
+          const text = await rawRes.text();
+          return JSON.parse(text);
+        }
+      }
+      if (typeof fileEntry.content === 'string') {
+        return JSON.parse(fileEntry.content);
+      }
+    } catch {}
+    return null;
+  };
+
+  if (session.gistId) {
+    try {
+      const singleRes = await githubApiFetch(
+        `https://api.github.com/gists/${encodeURIComponent(session.gistId)}`,
+        session.accessToken
+      );
+      if (singleRes.ok) {
+        const gist = await singleRes.json();
+        if (gist?.files?.[GITHUB_BACKUP_FILENAME]) {
+          return {
+            id: String(gist.id),
+            htmlUrl: String(gist.html_url || ''),
+            rawData: await extractGistData(gist),
+          };
+        }
+      }
+    } catch {}
+  }
+
+  const listRes = await githubApiFetch(
+    'https://api.github.com/gists?per_page=100',
+    session.accessToken
+  );
+  if (!listRes.ok) {
+    throw new Error(`GitHub Gists API failed (${listRes.status})`);
+  }
+  const list = (await listRes.json()) as any[];
+  const matched = Array.isArray(list)
+    ? list.find((g) => g && g.files && g.files[GITHUB_BACKUP_FILENAME])
+    : null;
+  if (!matched || !matched.id) return null;
+
+  const fullRes = await githubApiFetch(
+    `https://api.github.com/gists/${encodeURIComponent(String(matched.id))}`,
+    session.accessToken
+  );
+  if (!fullRes.ok) return null;
+  const fullGist = await fullRes.json();
+  return {
+    id: String(fullGist.id),
+    htmlUrl: String(fullGist.html_url || ''),
+    rawData: await extractGistData(fullGist),
+  };
+}
+
+app.post('/api/github/sync', async (req, res) => {
+  const found = getGitHubSessionFromReq(req);
+  if (!found) {
+    return res.status(401).json({
+      ok: false,
+      error: 'اتصال به حساب گیت‌هاب منقضی شده است. لطفاً دوباره متصل شوید.',
+    });
+  }
+
+  const { session } = found;
+  const mode = req.body?.mode === 'push' || req.body?.mode === 'pull' ? req.body.mode : 'merge';
+  const localPayload = req.body?.payload && typeof req.body.payload === 'object' ? req.body.payload : {};
+
+  try {
+    const existingGist = await findRadioReportGist(session);
+    const remoteData = existingGist?.rawData || null;
+    const nowIso = new Date().toISOString();
+
+    let finalData: any;
+    if (mode === 'pull') {
+      if (!remoteData) {
+        return res.status(404).json({
+          ok: false,
+          error: 'هنوز هیچ نسخه پشتیبانی در گیت‌هاب شما ذخیره نشده است. ابتدا همگام‌سازی یا ارسال به گیت‌هاب را انجام دهید.',
+        });
+      }
+      finalData = {
+        version: '1.2',
+        syncedAt: nowIso,
+        reports: Array.isArray(remoteData.reports) ? remoteData.reports : [],
+        templates: Array.isArray(remoteData.templates) ? remoteData.templates : [],
+        doctors: Array.isArray(remoteData.doctors) ? remoteData.doctors : [],
+        typists: Array.isArray(remoteData.typists) ? remoteData.typists : [],
+        shortcuts: Array.isArray(remoteData.shortcuts) ? remoteData.shortcuts : [],
+        referringPhysicians: Array.isArray(remoteData.referringPhysicians)
+          ? remoteData.referringPhysicians
+          : [],
+        settings: remoteData.settings || null,
+      };
+    } else if (mode === 'push') {
+      finalData = {
+        version: '1.2',
+        syncedAt: nowIso,
+        reports: Array.isArray(localPayload.reports) ? localPayload.reports : [],
+        templates: Array.isArray(localPayload.templates) ? localPayload.templates : [],
+        doctors: Array.isArray(localPayload.doctors) ? localPayload.doctors : [],
+        typists: Array.isArray(localPayload.typists) ? localPayload.typists : [],
+        shortcuts: Array.isArray(localPayload.shortcuts) ? localPayload.shortcuts : [],
+        referringPhysicians: Array.isArray(localPayload.referringPhysicians)
+          ? localPayload.referringPhysicians
+          : [],
+        settings: localPayload.settings || null,
+      };
+    } else {
+      finalData = {
+        version: '1.2',
+        syncedAt: nowIso,
+        reports: mergeById(remoteData?.reports || [], localPayload.reports || []).sort(
+          (a, b) =>
+            new Date(b.updatedAt || b.createdAt || 0).getTime() -
+            new Date(a.updatedAt || a.createdAt || 0).getTime()
+        ),
+        templates: mergeById(remoteData?.templates || [], localPayload.templates || []),
+        doctors: mergeById(remoteData?.doctors || [], localPayload.doctors || []),
+        typists: mergeById(remoteData?.typists || [], localPayload.typists || []),
+        shortcuts: mergeById(remoteData?.shortcuts || [], localPayload.shortcuts || []),
+        referringPhysicians: mergeById(
+          remoteData?.referringPhysicians || [],
+          localPayload.referringPhysicians || []
+        ),
+        settings: mergeSettingsObjects(remoteData?.settings || null, localPayload.settings || null),
+      };
+    }
+
+    let gistId = existingGist?.id || '';
+    let gistUrl = existingGist?.htmlUrl || '';
+
+    if (mode !== 'pull') {
+      const gistBody = {
+        description: GITHUB_GIST_DESCRIPTION,
+        public: false,
+        files: {
+          [GITHUB_BACKUP_FILENAME]: {
+            content: JSON.stringify(finalData, null, 2),
+          },
+        },
+      };
+
+      const saveRes = existingGist?.id
+        ? await githubApiFetch(
+            `https://api.github.com/gists/${encodeURIComponent(existingGist.id)}`,
+            session.accessToken,
+            {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(gistBody),
+            }
+          )
+        : await githubApiFetch('https://api.github.com/gists', session.accessToken, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(gistBody),
+          });
+
+      if (!saveRes.ok) {
+        const status = saveRes.status;
+        return res.status(502).json({
+          ok: false,
+          error:
+            status === 401 || status === 403
+              ? 'دسترسی نوشتن در Gist گیت‌هاب تایید نشد. لطفاً دوباره متصل شوید.'
+              : `ذخیره‌سازی در گیت‌هاب با خطای ${status} مواجه شد.`,
+        });
+      }
+
+      const savedGist: any = await saveRes.json();
+      gistId = String(savedGist.id || gistId);
+      gistUrl = String(savedGist.html_url || gistUrl);
+    }
+
+    session.gistId = gistId || session.gistId;
+    session.gistUrl = gistUrl || session.gistUrl;
+
+    return res.json({
+      ok: true,
+      mode,
+      gistId: session.gistId,
+      gistUrl: session.gistUrl,
+      user: session.user,
+      data: finalData,
+      counts: {
+        reports: finalData.reports.length,
+        templates: finalData.templates.length,
+        doctors: finalData.doctors.length,
+        typists: finalData.typists.length,
+        shortcuts: finalData.shortcuts.length,
+      },
+      timestamp: nowIso,
+    });
+  } catch (err) {
+    console.error('GitHub sync error:', err);
+    return res.status(500).json({
+      ok: false,
+      error: 'خطا در برقراری ارتباط با گیت‌هاب. لطفاً اتصال اینترنت را بررسی کنید.',
+    });
   }
 });
 

@@ -15,6 +15,7 @@ import {
 } from './types';
 import { StorageService } from './services/storage';
 import { IndexedDbService } from './services/indexedDbStorage';
+import { GitHubSyncService } from './services/githubSync';
 import { AiService } from './services/aiService';
 import { Navbar } from './components/Navbar';
 import { PatientTabsBar } from './components/PatientTabsBar';
@@ -267,7 +268,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
   }, []);
 
-  // Sync with IndexedDB multi-GB storage engine, SQLite LAN Server & Automated Local Folder Backup
+  // Sync with IndexedDB multi-GB storage engine, SQLite LAN Server, GitHub Cloud Sync & Automated Local Folder Backup
   useEffect(() => {
     IndexedDbService.syncWithLocalStorage().then((res) => {
       if (res.restoredFromIdb) {
@@ -282,13 +283,28 @@ export default function App() {
           setDoctors(StorageService.getDoctors());
           setTypists(StorageService.getTypists());
           setShortcuts(StorageService.getShortcuts());
+          const latestSettings = StorageService.getSettings();
+          setSettings((prev) =>
+            JSON.stringify(prev) === JSON.stringify(latestSettings) ? prev : latestSettings
+          );
+        }
+      });
+    }
+    if (GitHubSyncService.isConnectedInMemory()) {
+      GitHubSyncService.sync('merge').then((res) => {
+        if (res.ok) {
+          setSavedReports(StorageService.getSavedReports());
+          setTemplates(StorageService.getTemplates());
+          setDoctors(StorageService.getDoctors());
+          setTypists(StorageService.getTypists());
+          setShortcuts(StorageService.getShortcuts());
         }
       });
     }
     if (settings.autoFolderBackupEnabled) {
       IndexedDbService.writeBackupToSelectedFolder();
     }
-  }, [savedReports.length, templates.length, settings.lanSyncEnabled, settings.autoFolderBackupEnabled]);
+  }, [savedReports.length, templates.length, doctors.length, shortcuts.length, settings.lanSyncEnabled, settings.autoFolderBackupEnabled]);
 
   // Automated nightly / end-of-shift & page-close local folder backup (File System Access API)
   useEffect(() => {

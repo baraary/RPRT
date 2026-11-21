@@ -20,9 +20,18 @@ import {
   Palette,
   BookOpen,
   Plus,
+  Github,
+  RefreshCw,
+  CloudUpload,
+  CloudDownload,
+  LogOut,
+  Copy,
+  Check,
+  ExternalLink,
 } from 'lucide-react';
 import { StorageService } from '../services/storage';
 import { IndexedDbService } from '../services/indexedDbStorage';
+import { GitHubSyncService, GitHubSyncStatus } from '../services/githubSync';
 import { PWAInstallButton } from './PWAInstallButton';
 import {
   DEFAULT_CLINIC_LOGO_DATA_URI,
@@ -236,6 +245,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   );
   const [importStatus, setImportStatus] = useState<string>('');
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [githubStatus, setGithubStatus] = useState<GitHubSyncStatus | null>(null);
+  const [githubBusy, setGithubBusy] = useState(false);
+  const [githubMessage, setGithubMessage] = useState<string>('');
+  const [githubMessageTone, setGithubMessageTone] = useState<'info' | 'success' | 'error'>('info');
+  const [copiedCallbackUrl, setCopiedCallbackUrl] = useState(false);
 
   React.useEffect(() => {
     if (isOpen) {
@@ -268,7 +282,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setLastAutoBackupTime(IndexedDbService.getLastAutoBackupTime());
       IndexedDbService.getStorageQuotaEstimate().then((est) => setStorageEstimate(est));
       IndexedDbService.getLanServerStatus().then((info) => {
-        if (info) setLanServerInfo(info);
+        setLanServerInfo(info);
+      });
+      GitHubSyncService.getStatus().then((st) => {
+        setGithubStatus(st);
       });
     }
   }, [isOpen, settings, activeDoctorId]);
@@ -368,11 +385,96 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         `✓ همگام‌سازی با پایگاه داده مرکزی (${res.engine || 'SQLite'}) انجام شد (${res.mergedReportsCount} گزارش و ${res.mergedTemplatesCount} قالب مشترک).`
       );
       const info = await IndexedDbService.getLanServerStatus();
-      if (info) setLanServerInfo(info);
+      setLanServerInfo(info);
       onRefreshAllData();
     } else {
-      setLanSyncStatus('خطا در اتصال به سرور شبکه محلی.');
+      setLanSyncStatus(res.error || 'خطا در اتصال به سرور شبکه محلی.');
     }
+  };
+
+  const handleGitHubConnect = async () => {
+    setGithubBusy(true);
+    setGithubMessageTone('info');
+    setGithubMessage('در حال باز کردن پنجره امن ورود گیت‌هاب...');
+    const res = await GitHubSyncService.connectWithPopup();
+    if (res.ok) {
+      const updatedStatus = await GitHubSyncService.getStatus();
+      setGithubStatus(updatedStatus);
+      setGithubMessageTone('info');
+      setGithubMessage('✓ حساب گیت‌هاب متصل شد. در حال همگام‌سازی اولیه داده‌ها...');
+      const syncRes = await GitHubSyncService.sync('merge');
+      setGithubBusy(false);
+      if (syncRes.ok) {
+        const afterStatus = await GitHubSyncService.getStatus();
+        setGithubStatus(afterStatus);
+        setGithubMessageTone('success');
+        setGithubMessage(
+          `✓ همگام‌سازی ابری با گیت‌هاب با موفقیت انجام شد (${syncRes.counts?.reports ?? 0} گزارش، ${syncRes.counts?.templates ?? 0} قالب، ${syncRes.counts?.doctors ?? 0} پزشک و ${syncRes.counts?.shortcuts ?? 0} میانبر).`
+        );
+        onRefreshAllData();
+      } else {
+        setGithubMessageTone('error');
+        setGithubMessage(syncRes.error || 'اتصال برقرار شد اما همگام‌سازی اولیه ناموفق بود.');
+      }
+    } else {
+      setGithubBusy(false);
+      setGithubMessageTone('error');
+      setGithubMessage(res.error || 'اتصال به گیت‌هاب ناموفق بود.');
+      const st = await GitHubSyncService.getStatus();
+      setGithubStatus(st);
+    }
+  };
+
+  const handleGitHubSync = async (mode: 'merge' | 'push' | 'pull') => {
+    setGithubBusy(true);
+    setGithubMessageTone('info');
+    setGithubMessage(
+      mode === 'push'
+        ? 'در حال ارسال نسخه کامل اطلاعات به Gist خصوصی گیت‌هاب...'
+        : mode === 'pull'
+        ? 'در حال دریافت و بازیابی اطلاعات از گیت‌هاب...'
+        : 'در حال ادغام و همگام‌سازی دوطرفه با گیت‌هاب...'
+    );
+    const res = await GitHubSyncService.sync(mode);
+    setGithubBusy(false);
+    if (res.ok) {
+      const st = await GitHubSyncService.getStatus();
+      setGithubStatus(st);
+      setGithubMessageTone('success');
+      setGithubMessage(
+        `✓ ${
+          mode === 'push'
+            ? 'ارسال به گیت‌هاب'
+            : mode === 'pull'
+            ? 'دریافت از گیت‌هاب'
+            : 'همگام‌سازی دوطرفه گیت‌هاب'
+        } انجام شد (${res.counts?.reports ?? 0} گزارش، ${res.counts?.templates ?? 0} قالب، ${res.counts?.doctors ?? 0} پزشک).`
+      );
+      onRefreshAllData();
+    } else {
+      const st = await GitHubSyncService.getStatus();
+      setGithubStatus(st);
+      setGithubMessageTone('error');
+      setGithubMessage(res.error || 'خطا در همگام‌سازی با گیت‌هاب.');
+    }
+  };
+
+  const handleGitHubDisconnect = async () => {
+    setGithubBusy(true);
+    await GitHubSyncService.disconnect();
+    const st = await GitHubSyncService.getStatus();
+    setGithubStatus(st);
+    setGithubBusy(false);
+    setGithubMessageTone('info');
+    setGithubMessage('اتصال حساب گیت‌هاب قطع شد (اطلاعات محلی و بکاپ گیت‌هاب دست‌نخورده باقی ماندند).');
+  };
+
+  const handleCopyCallbackUrl = async (urlToCopy: string) => {
+    try {
+      await navigator.clipboard.writeText(urlToCopy);
+      setCopiedCallbackUrl(true);
+      window.setTimeout(() => setCopiedCallbackUrl(false), 2000);
+    } catch {}
   };
 
   const handleSelectBackupFolder = async () => {
@@ -1366,6 +1468,152 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <span className="text-[11px] font-bold text-indigo-800">{lanSyncStatus}</span>
                 )}
               </div>
+            </div>
+
+            {/* GitHub Cloud Sync (OAuth + Private Secret Gist) */}
+            <div className="p-3.5 bg-slate-900/[0.03] border border-slate-300 rounded-2xl space-y-2.5">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-slate-900">
+                  <Github className="w-4 h-4 text-slate-900" />
+                  <span>همگام‌سازی ابری با گیت‌هاب (GitHub Cloud Sync — فایل خصوصی Secret Gist)</span>
+                </div>
+                {githubStatus?.connected && githubStatus.user ? (
+                  <span className="inline-flex items-center gap-1.5 text-[11px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 px-2.5 py-0.5 rounded-lg">
+                    {githubStatus.user.avatarUrl && (
+                      <img
+                        src={githubStatus.user.avatarUrl}
+                        alt={githubStatus.user.login}
+                        className="w-4 h-4 rounded-full"
+                      />
+                    )}
+                    <span dir="ltr">@{githubStatus.user.login}</span>
+                    <span>متصل</span>
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200 px-2 py-0.5 rounded-lg">
+                    متصل نیست
+                  </span>
+                )}
+              </div>
+
+              <p className="text-[11px] text-slate-600 leading-relaxed">
+                تمام گزارش‌ها، قالب‌ها، لیست پزشکان، تایپیست‌ها، میانبرها و تنظیمات سربرگ را به صورت <strong>کاملاً خصوصی (Secret Gist)</strong> در حساب گیت‌هاب خودتان همگام‌سازی کنید تا بین سیستم مطب، بیمارستان و لپ‌تاپ همیشه یکپارچه باشند.
+              </p>
+
+              {githubStatus?.connected ? (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      disabled={githubBusy}
+                      onClick={() => handleGitHubSync('merge')}
+                      className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer flex items-center gap-1.5"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${githubBusy ? 'animate-spin' : ''}`} />
+                      <span>همگام‌سازی هوشمند دوطرفه (ادغام)</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={githubBusy}
+                      onClick={() => handleGitHubSync('push')}
+                      className="px-2.5 py-1.5 bg-white hover:bg-slate-100 disabled:opacity-60 text-slate-800 border border-slate-300 text-xs font-bold rounded-xl transition-colors cursor-pointer flex items-center gap-1"
+                    >
+                      <CloudUpload className="w-3.5 h-3.5 text-teal-600" />
+                      <span>ارسال به گیت‌هاب</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={githubBusy}
+                      onClick={() => handleGitHubSync('pull')}
+                      className="px-2.5 py-1.5 bg-white hover:bg-slate-100 disabled:opacity-60 text-slate-800 border border-slate-300 text-xs font-bold rounded-xl transition-colors cursor-pointer flex items-center gap-1"
+                    >
+                      <CloudDownload className="w-3.5 h-3.5 text-sky-600" />
+                      <span>دریافت از گیت‌هاب</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={githubBusy}
+                      onClick={handleGitHubDisconnect}
+                      className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 disabled:opacity-60 text-rose-700 border border-rose-200 text-xs font-bold rounded-xl transition-colors cursor-pointer flex items-center gap-1"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      <span>قطع اتصال</span>
+                    </button>
+                  </div>
+
+                  {githubStatus.gistUrl && (
+                    <div className="text-[11px] text-slate-600 flex items-center gap-1.5 flex-wrap">
+                      <span>فایل خصوصی بکاپ در گیت‌هاب:</span>
+                      <a
+                        href={githubStatus.gistUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-mono text-teal-700 hover:text-teal-900 underline inline-flex items-center gap-1"
+                        dir="ltr"
+                      >
+                        <span>مشاهده Secret Gist</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      disabled={githubBusy}
+                      onClick={handleGitHubConnect}
+                      className="px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer flex items-center gap-1.5"
+                    >
+                      <Github className="w-3.5 h-3.5" />
+                      <span>{githubBusy ? 'در حال اتصال...' : 'اتصال به حساب گیت‌هاب (GitHub)'}</span>
+                    </button>
+                  </div>
+
+                  {githubStatus && !githubStatus.configured && (
+                    <div className="p-2.5 bg-white rounded-xl border border-slate-200 text-[11px] text-slate-700 space-y-1.5">
+                      <div className="font-bold text-slate-900">
+                        راهنمای یک‌باره فعال‌سازی OAuth گیت‌هاب (سمت سرور):
+                      </div>
+                      <p className="text-slate-600 leading-relaxed">
+                        در تنظیمات گیت‌هاب (<span dir="ltr" className="font-mono">Developer Settings → OAuth Apps</span>) یک اپلیکیشن بسازید، آدرس زیر را به عنوان <span dir="ltr" className="font-mono">Authorization callback URL</span> قرار دهید و مقادیر <span dir="ltr" className="font-mono font-bold">GITHUB_CLIENT_ID</span> و <span dir="ltr" className="font-mono font-bold">GITHUB_CLIENT_SECRET</span> را در بخش Secrets سرور تنظیم کنید:
+                      </p>
+                      <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1">
+                        <code className="text-[10.5px] font-mono text-slate-800 break-all flex-1" dir="ltr">
+                          {githubStatus.callbackUrl}
+                        </code>
+                        <button
+                          type="button"
+                          onClick={() => handleCopyCallbackUrl(githubStatus.callbackUrl)}
+                          className="p-1 text-slate-500 hover:text-teal-700 rounded cursor-pointer shrink-0"
+                          title="کپی آدرس Callback"
+                        >
+                          {copiedCallbackUrl ? (
+                            <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          ) : (
+                            <Copy className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {githubMessage && (
+                <div
+                  className={`text-[11px] font-bold p-2 rounded-lg border ${
+                    githubMessageTone === 'success'
+                      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                      : githubMessageTone === 'error'
+                      ? 'bg-rose-50 text-rose-800 border-rose-200'
+                      : 'bg-white text-slate-700 border-slate-200'
+                  }`}
+                >
+                  {githubMessage}
+                </div>
+              )}
             </div>
 
             {/* Automated Daily Local Folder Backup (File System Access API) */}

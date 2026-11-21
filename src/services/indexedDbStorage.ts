@@ -272,7 +272,8 @@ export const IndexedDbService = {
   } | null> {
     try {
       const res = await fetch('/api/lan/status');
-      if (!res.ok) return null;
+      const contentType = res.headers.get('content-type') || '';
+      if (!res.ok || !contentType.toLowerCase().includes('application/json')) return null;
       return await res.json();
     } catch {
       return null;
@@ -280,7 +281,8 @@ export const IndexedDbService = {
   },
 
   /**
-   * Syncs reports, templates, doctors, typists, and shortcuts with the local clinic LAN SQLite server (/api/lan/sync)
+   * Syncs reports, templates, doctors, typists, shortcuts, referring physicians, and settings
+   * with the local clinic LAN SQLite server (/api/lan/sync)
    */
   async syncWithLanServer(): Promise<{
     ok: boolean;
@@ -289,6 +291,7 @@ export const IndexedDbService = {
     engine?: string;
     lanUrls?: string[];
     timestamp?: string;
+    error?: string;
   }> {
     try {
       const payload = {
@@ -297,6 +300,8 @@ export const IndexedDbService = {
         doctors: StorageService.getDoctors(),
         typists: StorageService.getTypists(),
         shortcuts: StorageService.getShortcuts(),
+        referringPhysicians: StorageService.getReferringPhysicians(),
+        settings: StorageService.getSettings(),
       };
 
       const res = await fetch('/api/lan/sync', {
@@ -305,15 +310,27 @@ export const IndexedDbService = {
         body: JSON.stringify(payload),
       });
 
-      if (!res.ok) {
+      const contentType = res.headers.get('content-type') || '';
+      if (!res.ok || !contentType.toLowerCase().includes('application/json')) {
         return {
           ok: false,
           mergedReportsCount: payload.reports.length,
           mergedTemplatesCount: payload.templates.length,
+          error:
+            'سرور شبکه محلی (Node + SQLite) در دسترس نیست. اگر برنامه را روی هاست استاتیک باز کرده‌اید، از همگام‌سازی ابری گیت‌هاب استفاده کنید.',
         };
       }
 
       const data = await res.json();
+      if (data.ok === false) {
+        return {
+          ok: false,
+          mergedReportsCount: payload.reports.length,
+          mergedTemplatesCount: payload.templates.length,
+          error: data.error || 'خطا در همگام‌سازی با پایگاه داده محلی.',
+        };
+      }
+
       if (data.reports && Array.isArray(data.reports)) {
         StorageService.saveAllReports(data.reports);
         await this.setItem('reports', data.reports);
@@ -324,12 +341,21 @@ export const IndexedDbService = {
       }
       if (data.doctors && Array.isArray(data.doctors)) {
         StorageService.saveDoctors(data.doctors);
+        await this.setItem('doctors', data.doctors);
       }
       if (data.typists && Array.isArray(data.typists)) {
         StorageService.saveTypists(data.typists);
+        await this.setItem('typists', data.typists);
       }
       if (data.shortcuts && Array.isArray(data.shortcuts)) {
         StorageService.saveShortcuts(data.shortcuts);
+        await this.setItem('shortcuts', data.shortcuts);
+      }
+      if (data.referringPhysicians && Array.isArray(data.referringPhysicians)) {
+        StorageService.saveReferringPhysicians(data.referringPhysicians);
+      }
+      if (data.settings && typeof data.settings === 'object') {
+        StorageService.saveSettings(data.settings);
       }
 
       return {
@@ -345,6 +371,7 @@ export const IndexedDbService = {
         ok: false,
         mergedReportsCount: StorageService.getSavedReports().length,
         mergedTemplatesCount: StorageService.getTemplates().length,
+        error: 'ارتباط با سرور شبکه محلی برقرار نشد.',
       };
     }
   },

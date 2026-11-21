@@ -719,7 +719,7 @@ function drawWrappedLineOnPdf(
   baselineY: number,
   fontSizePt: number,
   defaultHexColor: string,
-  align: 'default' | 'center' = 'default'
+  align: 'default' | 'center' | 'left' = 'default'
 ): void {
   if (lineRuns.length === 0) return;
 
@@ -729,18 +729,22 @@ function drawWrappedLineOnPdf(
   pdf.setFont('Vazirmatn', 'normal');
   const spaceW = pdf.getTextWidth(' ');
 
-  // Calculate total line width if centered
+  // Calculate total line width if centered or left-aligned RTL
   let startCursorX = baseDir === 'rtl' ? xRight : xLeft;
-  if (align === 'center') {
+  if (align === 'center' || (align === 'left' && baseDir === 'rtl')) {
     let totalW = 0;
     for (const r of lineRuns) {
       totalW += measureScriptRunWidthMm(pdf, r, fontSizePt);
     }
     const boxW = xRight - xLeft;
-    if (baseDir === 'rtl') {
-      startCursorX = xRight - Math.max(0, (boxW - totalW) / 2);
-    } else {
-      startCursorX = xLeft + Math.max(0, (boxW - totalW) / 2);
+    if (align === 'center') {
+      if (baseDir === 'rtl') {
+        startCursorX = xRight - Math.max(0, (boxW - totalW) / 2);
+      } else {
+        startCursorX = xLeft + Math.max(0, (boxW - totalW) / 2);
+      }
+    } else if (align === 'left' && baseDir === 'rtl') {
+      startCursorX = Math.min(xRight, xLeft + totalW);
     }
   }
 
@@ -1029,7 +1033,7 @@ export async function exportTrueVectorPdfReport(
         );
       }
 
-      // Left Side Admission & Date
+      // Left Side Admission & Date (RTL logical order, left-aligned on the left side of the header)
       const admText = `شماره پذیرش: ${patientInfo.admissionNumber || 'ADM-001'}`;
       const admLines = wrapSegmentsIntoLines(
         pdf,
@@ -1039,7 +1043,7 @@ export async function exportTrueVectorPdfReport(
         52
       );
       if (admLines[0]) {
-        drawWrappedLineOnPdf(pdf, admLines[0], 'ltr', marginLeft, 65, cursorY + 6, 8.5, '#050811');
+        drawWrappedLineOnPdf(pdf, admLines[0], 'rtl', marginLeft, 65, cursorY + 6, 8.5, '#050811', 'left');
       }
 
       const dateText = `تاریخ: ${patientInfo.reportDate || '۱۴۰۴/۰۸/۲۱'}`;
@@ -1051,7 +1055,7 @@ export async function exportTrueVectorPdfReport(
         52
       );
       if (dateLines[0]) {
-        drawWrappedLineOnPdf(pdf, dateLines[0], 'ltr', marginLeft, 65, cursorY + 11.2, 8.2, '#1e293b');
+        drawWrappedLineOnPdf(pdf, dateLines[0], 'rtl', marginLeft, 65, cursorY + 11.2, 8.2, '#1e293b', 'left');
       }
 
       if (totalPages > 1) {
@@ -1067,12 +1071,13 @@ export async function exportTrueVectorPdfReport(
           drawWrappedLineOnPdf(
             pdf,
             pageLines[0],
-            'ltr',
+            'rtl',
             marginLeft,
             65,
             cursorY + 16,
             8,
-            activeModalityColor
+            activeModalityColor,
+            'left'
           );
         }
       }
@@ -1901,7 +1906,7 @@ function drawCanvasWrappedLine(
   fontSizeMm: number,
   persianFontCss: string,
   defaultHexColor: string,
-  align: 'default' | 'center' = 'default'
+  align: 'default' | 'center' | 'left' = 'default'
 ): void {
   if (lineRuns.length === 0) return;
 
@@ -1909,16 +1914,20 @@ function drawCanvasWrappedLine(
   const spaceW = ctx.measureText(' ').width;
 
   let startCursorX = baseDir === 'rtl' ? xRight : xLeft;
-  if (align === 'center') {
+  if (align === 'center' || (align === 'left' && baseDir === 'rtl')) {
     let totalW = 0;
     for (const r of lineRuns) {
       totalW += measureCanvasRunWidthMm(ctx, r, fontSizeMm, persianFontCss);
     }
     const boxW = xRight - xLeft;
-    if (baseDir === 'rtl') {
-      startCursorX = xRight - Math.max(0, (boxW - totalW) / 2);
-    } else {
-      startCursorX = xLeft + Math.max(0, (boxW - totalW) / 2);
+    if (align === 'center') {
+      if (baseDir === 'rtl') {
+        startCursorX = xRight - Math.max(0, (boxW - totalW) / 2);
+      } else {
+        startCursorX = xLeft + Math.max(0, (boxW - totalW) / 2);
+      }
+    } else if (align === 'left' && baseDir === 'rtl') {
+      startCursorX = Math.min(xRight, xLeft + totalW);
     }
   }
 
@@ -2182,7 +2191,7 @@ export async function renderTrueVectorCanvasPage(
       );
     }
 
-    // Left Side Admission & Date
+    // Left Side Admission & Date (RTL logical order, left-aligned on the left side of the header)
     const admMm = 3.0;
     const admLines = wrapCanvasSegmentsIntoLines(
       ctx,
@@ -2196,13 +2205,14 @@ export async function renderTrueVectorCanvasPage(
       drawCanvasWrappedLine(
         ctx,
         admLines[0],
-        'ltr',
+        'rtl',
         marginLeft,
         65,
         cursorY + 6,
         admMm,
         headerFontCss,
-        '#050811'
+        '#050811',
+        'left'
       );
     }
 
@@ -2218,13 +2228,14 @@ export async function renderTrueVectorCanvasPage(
       drawCanvasWrappedLine(
         ctx,
         dateLines[0],
-        'ltr',
+        'rtl',
         marginLeft,
         65,
         cursorY + 11.2,
         2.9,
         headerFontCss,
-        '#1e293b'
+        '#1e293b',
+        'left'
       );
     }
 
@@ -2241,13 +2252,14 @@ export async function renderTrueVectorCanvasPage(
         drawCanvasWrappedLine(
           ctx,
           pageLines[0],
-          'ltr',
+          'rtl',
           marginLeft,
           65,
           cursorY + 16,
           2.8,
           headerFontCss,
-          activeModalityColor
+          activeModalityColor,
+          'left'
         );
       }
     }

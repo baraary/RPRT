@@ -1254,17 +1254,25 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
 
                         {/* Header Left Demographic Summary (National ID removed from here so it only appears once in the Patient Demographics Box below) */}
                         <div
+                          dir="rtl"
                           className="text-left space-y-0.5 shrink-0"
                           style={{ fontFamily: resolvedHeaderFontCss }}
                         >
-                          <div className="text-[11px] font-extrabold text-slate-950">
-                            شماره پذیرش: {patientInfo.admissionNumber || 'ADM-001'}
+                          <div dir="rtl" className="text-[11px] font-extrabold text-slate-950">
+                            <span>شماره پذیرش: </span>
+                            <span dir="ltr" className="inline-block">
+                              {patientInfo.admissionNumber || 'ADM-001'}
+                            </span>
                           </div>
-                          <div className="text-[10.5px] font-bold text-slate-800">
-                            تاریخ: {patientInfo.reportDate || '۱۴۰۴/۰۸/۲۱'}
+                          <div dir="rtl" className="text-[10.5px] font-bold text-slate-800">
+                            <span>تاریخ: </span>
+                            <span dir="ltr" className="inline-block">
+                              {patientInfo.reportDate || '۱۴۰۴/۰۸/۲۱'}
+                            </span>
                           </div>
                           {paginationResult.totalPages > 1 && (
                             <div
+                              dir="rtl"
                               className="text-[10px] font-extrabold pt-0.5"
                               style={{ color: monochromePrintMode ? '#000000' : activeModalityColor }}
                             >
