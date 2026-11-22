@@ -33,6 +33,7 @@ import { StorageService } from '../services/storage';
 import { IndexedDbService } from '../services/indexedDbStorage';
 import { GitHubSyncService, GitHubSyncStatus } from '../services/githubSync';
 import { PWAInstallButton } from './PWAInstallButton';
+import { WindowsShareGuideModal } from './WindowsShareGuideModal';
 import {
   DEFAULT_CLINIC_LOGO_DATA_URI,
   getOfficialClinicLogoDataUri,
@@ -250,6 +251,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [githubMessage, setGithubMessage] = useState<string>('');
   const [githubMessageTone, setGithubMessageTone] = useState<'info' | 'success' | 'error'>('info');
   const [copiedCallbackUrl, setCopiedCallbackUrl] = useState(false);
+  const [showShareGuide, setShowShareGuide] = useState(false);
 
   React.useEffect(() => {
     if (isOpen) {
@@ -1682,6 +1684,33 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <span>همگام‌سازی فوری / تایید مجدد دسترسی پوشه</span>
                   </button>
                 )}
+                <button
+                  type="button"
+                  onClick={() => setShowShareGuide(true)}
+                  className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-amber-200 border border-slate-700 text-xs font-bold rounded-xl transition-colors cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                >
+                  <BookOpen className="w-3.5 h-3.5 text-amber-400" />
+                  <span>راهنمای تصویری اشتراک‌گذاری پوشه در ویندوز (مخصوص پزشکان)</span>
+                </button>
+              </div>
+              {/* Compact 4-step inline summary for doctors */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 pt-0.5 text-[10.5px]">
+                <div className="bg-white/80 border border-amber-200/80 rounded-xl px-2.5 py-1.5 text-slate-700">
+                  <strong className="text-amber-900 block">۱. ساخت پوشه</strong>
+                  <span>یک پوشه در سیستم اصلی</span>
+                </div>
+                <div className="bg-white/80 border border-amber-200/80 rounded-xl px-2.5 py-1.5 text-slate-700">
+                  <strong className="text-amber-900 block">۲. Share → Everyone</strong>
+                  <span>دسترسی روی Read/Write</span>
+                </div>
+                <div className="bg-white/80 border border-amber-200/80 rounded-xl px-2.5 py-1.5 text-slate-700">
+                  <strong className="text-amber-900 block">۳. درایو Z: در بقیه PCها</strong>
+                  <span>Map network drive</span>
+                </div>
+                <div className="bg-white/80 border border-amber-200/80 rounded-xl px-2.5 py-1.5 text-slate-700">
+                  <strong className="text-amber-900 block">۴. انتخاب پوشه در سامانه</strong>
+                  <span>همگام‌سازی خودکار زنده</span>
+                </div>
               </div>
               {(savedFolderName || lastAutoBackupTime) && (
                 <div className="flex items-center justify-between flex-wrap gap-2 text-[11px] bg-white/90 px-3 py-1.5 rounded-xl border border-amber-200 text-slate-700">
@@ -1799,6 +1828,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
         </form>
       </div>
+
+      <WindowsShareGuideModal
+        isOpen={showShareGuide}
+        onClose={() => setShowShareGuide(false)}
+        onSelectFolderNow={handleSelectBackupFolder}
+      />
     </div>
   );
 };

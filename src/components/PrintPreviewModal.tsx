@@ -1,5 +1,5 @@
-import React, { useRef, useState, useEffect, useMemo } from 'react';
-import { PatientInfo, Doctor, AppSettings, ReportStudy, Modality } from '../types';
+import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
+import { PatientInfo, Doctor, AppSettings, ReportStudy, Modality, MedicalReport } from '../types';
 import {
   Copy,
   X,
@@ -11,6 +11,14 @@ import {
   Image as ImageIcon,
   Share2,
   Type,
+  Layers,
+  Plus,
+  Trash2,
+  ChevronUp,
+  ChevronDown,
+  Search,
+  CalendarCheck,
+  Loader2,
 } from 'lucide-react';
 import QRCode from 'qrcode';
 import {
@@ -36,6 +44,10 @@ interface PrintPreviewModalProps {
   onUpdateSettings?: (updates: Partial<AppSettings>) => void;
   initialAutoAction?: 'png' | 'pdf' | null;
   onAutoActionComplete?: () => void;
+  savedReports?: MedicalReport[];
+  doctors?: Doctor[];
+  initialBatchReports?: MedicalReport[];
+  onRecordBatchPrintedReports?: (reportIds: string[]) => void;
 }
 
 // Custom Paper-Feed Animated SVG Icon (mimics a sheet feeding through printer rollers)
@@ -76,6 +88,10 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   onUpdateSettings,
   initialAutoAction,
   onAutoActionComplete,
+  savedReports = [],
+  doctors = [],
+  initialBatchReports = [],
+  onRecordBatchPrintedReports,
 }) => {
   const [copied, setCopied] = useState(false);
   const [forcePageBreakPerStudy, setForcePageBreakPerStudy] = useState(
@@ -101,14 +117,24 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   const [bodyFont, setBodyFont] = useState(settings.defaultFont || "'Vazirmatn', sans-serif");
   const [bodyFontSize, setBodyFontSize] = useState<number>(settings.defaultFontSize || 14);
   const [qrMode, setQrMode] = useState<'url' | 'text'>('url');
-  const [qrDataUrl, setQrDataUrl] = useState<string>('');
+  const [qrMap, setQrMap] = useState<Record<string, string>>({});
   const [isQrInspectOpen, setIsQrInspectOpen] = useState(false);
   const [printSuccessFeedback, setPrintSuccessFeedback] = useState(false);
   const [isExportingImage, setIsExportingImage] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [shareFeedback, setShareFeedback] = useState<string>('');
+  const [batchQueue, setBatchQueue] = useState<MedicalReport[]>([]);
+  const [showQueuePanel, setShowQueuePanel] = useState(false);
+  const [queueSearch, setQueueSearch] = useState('');
+  const [batchProgress, setBatchProgress] = useState<{
+    kind: 'pdf' | 'png';
+    current: number;
+    total: number;
+    label: string;
+  } | null>(null);
   const printAreaRef = useRef<HTMLDivElement>(null);
   const pageRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const reportBlockRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const unifiedLineHeight = settings.editorLineHeight || settings.printLineHeight || 1.8;
 
@@ -124,8 +150,17 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
       setPreprintedLetterheadMode(Boolean(settings.preprintedLetterheadMode));
       setPreprintedTopMarginMm(settings.preprintedTopMarginMm ?? 45);
       setMonochromePrintMode(Boolean(settings.monochromePrintMode));
+      if (initialBatchReports && initialBatchReports.length > 0) {
+        setBatchQueue(initialBatchReports);
+        setShowQueuePanel(true);
+      } else {
+        setBatchQueue([]);
+        setShowQueuePanel(false);
+      }
+      setQueueSearch('');
+      setBatchProgress(null);
     }
-  }, [isOpen, settings]);
+  }, [isOpen, settings, initialBatchReports]);
 
   const modalityNames: Record<Modality, string> = {
     mri: 'ام‌آر‌آی (MRI)',
@@ -133,15 +168,16 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
     sonography: 'سونوگرافی (Ultrasound)',
   };
 
-  const primaryModality: Modality = studies[0]?.modality || 'sonography';
-  const getModalityColorHex = (mod: Modality): string => {
-    if (monochromePrintMode) return '#000000';
-    return (
-      settings.modalityColors?.[mod] ||
-      (mod === 'mri' ? '#4f46e5' : mod === 'ct' ? '#059669' : '#0284c7')
-    );
-  };
-  const activeModalityColor = getModalityColorHex(primaryModality);
+  const getModalityColorHex = useCallback(
+    (mod: Modality): string => {
+      if (monochromePrintMode) return '#000000';
+      return (
+        settings.modalityColors?.[mod] ||
+        (mod === 'mri' ? '#4f46e5' : mod === 'ct' ? '#059669' : '#0284c7')
+      );
+    },
+    [monochromePrintMode, settings.modalityColors]
+  );
 
   // Format font-family safely: ALWAYS prepend 'TimesNewRomanLatin' (so all English words/terms inside Persian or English reports render in Times New Roman) and append loaded Persian web fonts
   const formatCssFontStack = (fontVal: string) => {
@@ -181,100 +217,314 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
     return `'${cleanName}', 'Vazirmatn', sans-serif`;
   };
 
+  const sanitizeSignatureUrl = (rawSig?: string) => {
+    const val = rawSig || '';
+    if (!val.includes('RADIOLOGY')) return val;
+    return val.replace(
+      encodeURIComponent(
+        '<text x="62" y="48" font-family="Tahoma, sans-serif" font-size="10" font-weight="bold" fill="#0f766e" text-anchor="middle" opacity="0.85">RADIOLOGY</text>'
+      ),
+      encodeURIComponent(
+        '<path d="M62 24 L65 37 L78 37 L67 45 L71 58 L62 50 L53 58 L57 45 L46 37 L59 37 Z" fill="none" stroke="#0f766e" stroke-width="1.4" opacity="0.55"/>'
+      )
+    );
+  };
+
   const resolvedHeaderFontCss = formatCssFontStack(headerFont);
   const resolvedHeadingFontCss = formatCssFontStack(headingFont);
   const resolvedBodyFontCss = formatCssFontStack(bodyFont);
-  const resolvedDoctorStampFontCss = formatStampFontStack(
-    doctor.stampFont || headerFont || "'Vazirmatn', sans-serif"
-  );
-  const resolvedDoctorStampFontSize = doctor.stampFontSize || 13;
 
-  // Shared deterministic A4 pagination engine (100% synced with RichMedicalEditor A4 meter)
-  const paginationResult = useMemo(() => {
-    return paginateStudiesIntoA4Pages(studies, {
-      defaultFontSize: bodyFontSize || 14,
-      printLineHeight: unifiedLineHeight,
-      forcePageBreakPerStudy,
-      preprintedLetterheadMode,
-      preprintedTopMarginMm,
+  const isBatchMode = batchQueue.length > 0;
+
+  // Build normalized render entries for either Single Editor Report or Multi-Report Batch Queue
+  const renderedReports = useMemo(() => {
+    const rawLogoUrl = settings.clinicLogoUrl || DEFAULT_CLINIC_LOGO_DATA_URI;
+
+    const buildEntry = (
+      key: string,
+      pInfo: PatientInfo,
+      stList: ReportStudy[],
+      doc: Doctor,
+      isCurrentEditor: boolean
+    ) => {
+      const safeStudies = stList && stList.length > 0 ? stList : studies;
+      const mod: Modality = safeStudies[0]?.modality || 'sonography';
+      const modColor = getModalityColorHex(mod);
+      const logoUrl = isOfficialClinicLogoUri(rawLogoUrl)
+        ? getOfficialClinicLogoDataUri(modColor)
+        : rawLogoUrl;
+      const sigUrl = sanitizeSignatureUrl(doc.signatureUrl || settings.doctorSignatureUrl || '');
+      const stampFontCss = formatStampFontStack(doc.stampFont || headerFont || "'Vazirmatn', sans-serif");
+      const stampFontSize = doc.stampFontSize || 13;
+      const pagination = paginateStudiesIntoA4Pages(safeStudies, {
+        defaultFontSize: bodyFontSize || 14,
+        printLineHeight: unifiedLineHeight,
+        forcePageBreakPerStudy,
+        preprintedLetterheadMode,
+        preprintedTopMarginMm,
+      });
+
+      return {
+        key,
+        isCurrentEditor,
+        patientInfo: pInfo,
+        studies: safeStudies,
+        doctor: doc,
+        primaryModality: mod,
+        activeModalityColor: modColor,
+        effectiveLogoUrl: logoUrl,
+        effectiveSignatureUrl: sigUrl,
+        resolvedDoctorStampFontCss: stampFontCss,
+        resolvedDoctorStampFontSize: stampFontSize,
+        pagination,
+      };
+    };
+
+    if (!isBatchMode) {
+      return [buildEntry('__current__', patientInfo, studies, doctor, true)];
+    }
+
+    return batchQueue.map((rep) => {
+      const matchedDoc = doctors.find((d) => d.id === rep.doctorId) || doctor;
+      return buildEntry(
+        rep.id,
+        rep.patientInfo,
+        rep.studies && rep.studies.length > 0 ? rep.studies : [],
+        matchedDoc,
+        rep.id === '__current_editor__'
+      );
     });
   }, [
+    isBatchMode,
+    batchQueue,
+    doctors,
+    patientInfo,
     studies,
+    doctor,
+    settings.clinicLogoUrl,
+    settings.doctorSignatureUrl,
+    headerFont,
     bodyFontSize,
     unifiedLineHeight,
     forcePageBreakPerStudy,
     preprintedLetterheadMode,
     preprintedTopMarginMm,
+    getModalityColorHex,
   ]);
 
-  // Generate high-contrast, low-density QR code that smartphone cameras scan instantaneously
-  useEffect(() => {
-    if (!isOpen) return;
-    const adm = patientInfo.admissionNumber || 'ADM-001';
-    const date = patientInfo.reportDate || '1404/08/21';
-    const modCode = studies
-      .map((s) => (s.modality === 'mri' ? 'MRI' : s.modality === 'ct' ? 'CT' : 'US'))
-      .join('+');
+  const primaryEntry = renderedReports[0];
+  const paginationResult = primaryEntry.pagination;
+  const activeModalityColor = primaryEntry.activeModalityColor;
+  const resolvedDoctorStampFontCss = primaryEntry.resolvedDoctorStampFontCss;
+  const totalBatchPages = useMemo(
+    () => renderedReports.reduce((sum, item) => sum + item.pagination.totalPages, 0),
+    [renderedReports]
+  );
 
-    let payload = '';
-    if (qrMode === 'url') {
-      const origin =
-        typeof window !== 'undefined' && window.location.origin
-          ? window.location.origin
-          : 'https://shafa-imaging.ir';
-      const params = new URLSearchParams({
-        v: '1',
-        a: adm,
-        d: date,
-        m: modCode,
-        mc: doctor.medicalCouncilId || '45892',
-      });
-      if (patientInfo.fullName && patientInfo.fullName.length <= 28) {
-        params.set('p', patientInfo.fullName);
+  const buildQrPayloadForEntry = useCallback(
+    (pInfo: PatientInfo, stList: ReportStudy[], doc: Doctor, mode: 'url' | 'text') => {
+      const adm = pInfo.admissionNumber || 'ADM-001';
+      const date = pInfo.reportDate || '1404/08/21';
+      const modCode = stList
+        .map((s) => (s.modality === 'mri' ? 'MRI' : s.modality === 'ct' ? 'CT' : 'US'))
+        .join('+');
+
+      if (mode === 'url') {
+        const origin =
+          typeof window !== 'undefined' && window.location.origin
+            ? window.location.origin
+            : 'https://shafa-imaging.ir';
+        const params = new URLSearchParams({
+          v: '1',
+          a: adm,
+          d: date,
+          m: modCode,
+          mc: doc.medicalCouncilId || '45892',
+        });
+        if (pInfo.fullName && pInfo.fullName.length <= 28) {
+          params.set('p', pInfo.fullName);
+        }
+        return `${origin}/?${params.toString()}`;
       }
-      payload = `${origin}/?${params.toString()}`;
-    } else {
-      payload = [
-        'بیمارستان شفا ساری',
-        `بیمار: ${patientInfo.fullName || '---'}`,
+
+      return [
+        settings.clinicName || 'مرکز جامع تصویربرداری بیمارستان شفا',
+        `بیمار: ${pInfo.fullName || '---'}`,
         `پذیرش: ${adm}`,
         `تاریخ: ${date}`,
         `بررسی: ${modCode}`,
-        `پزشک: ${doctor.name} (ن.پ: ${doctor.medicalCouncilId})`,
+        `پزشک: ${doc.name} (ن.پ: ${doc.medicalCouncilId})`,
         'وضعیت: تایید اصالت نهایی',
       ].join('\n');
+    },
+    [settings.clinicName]
+  );
+
+  // Generate high-contrast, low-density QR codes for EVERY report in single or batch mode
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+
+    const generateAllQrs = async () => {
+      const entries = await Promise.all(
+        renderedReports.map(async (entry) => {
+          try {
+            const payload = buildQrPayloadForEntry(
+              entry.patientInfo,
+              entry.studies,
+              entry.doctor,
+              qrMode
+            );
+            const url = await QRCode.toDataURL(payload, {
+              width: 320,
+              margin: 2,
+              errorCorrectionLevel: 'L',
+              color: {
+                dark: '#000000',
+                light: '#ffffff',
+              },
+            });
+            return [entry.key, url] as const;
+          } catch (err) {
+            console.error('QR code generation error', err);
+            return [entry.key, ''] as const;
+          }
+        })
+      );
+
+      if (!cancelled) {
+        const nextMap: Record<string, string> = {};
+        entries.forEach(([k, v]) => {
+          if (v) nextMap[k] = v;
+        });
+        setQrMap(nextMap);
+      }
+    };
+
+    generateAllQrs();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, renderedReports, qrMode, buildQrPayloadForEntry]);
+
+  const qrDataUrl = qrMap[primaryEntry.key] || '';
+
+  // Batch queue manipulation helpers
+  const handleAddReportToQueue = (rep: MedicalReport) => {
+    setBatchQueue((prev) => {
+      if (prev.some((r) => r.id === rep.id)) return prev;
+      return [...prev, rep];
+    });
+  };
+
+  const handleAddCurrentEditorToQueue = () => {
+    const snapshot: MedicalReport = {
+      id: '__current_editor__',
+      patientInfo: { ...patientInfo },
+      studies: JSON.parse(JSON.stringify(studies)),
+      doctorId: doctor.id,
+      status: 'finalized',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    setBatchQueue((prev) => {
+      const exists = prev.some((r) => r.id === '__current_editor__');
+      if (exists) {
+        return prev.map((r) => (r.id === '__current_editor__' ? snapshot : r));
+      }
+      return [snapshot, ...prev];
+    });
+  };
+
+  const handleAddTodaysReportsToQueue = () => {
+    const todayIso = new Date().toISOString().slice(0, 10);
+    let todayFa = '';
+    try {
+      todayFa = new Intl.DateTimeFormat('fa-IR-u-nu-latn', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(new Date());
+    } catch {}
+    const normalizeDate = (s: string) =>
+      (s || '')
+        .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+        .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+        .trim();
+    const normToday = normalizeDate(todayFa);
+
+    const todays = savedReports.filter((rep) => {
+      if (rep.createdAt?.slice(0, 10) === todayIso) return true;
+      const rd = normalizeDate(rep.patientInfo?.reportDate || '');
+      return Boolean(normToday && rd && rd === normToday);
+    });
+
+    if (todays.length === 0) {
+      setShareFeedback('گزارشی با تاریخ امروز در آرشیو یافت نشد.');
+      setTimeout(() => setShareFeedback(''), 3000);
+      return;
     }
 
-    QRCode.toDataURL(payload, {
-      width: 320,
-      margin: 2,
-      errorCorrectionLevel: 'L',
-      color: {
-        dark: '#000000',
-        light: '#ffffff',
-      },
-    })
-      .then((url) => setQrDataUrl(url))
-      .catch((err) => console.error('QR code generation error', err));
-  }, [isOpen, patientInfo, studies, doctor, qrMode]);
+    setBatchQueue((prev) => {
+      const existingIds = new Set(prev.map((r) => r.id));
+      const additions = todays.filter((r) => !existingIds.has(r.id));
+      return [...prev, ...additions];
+    });
+    setShareFeedback(`✓ ${todays.length} گزارش امروز به صف چاپ دسته‌ای اضافه شد.`);
+    setTimeout(() => setShareFeedback(''), 3000);
+  };
 
-  const rawLogoUrl = settings.clinicLogoUrl || DEFAULT_CLINIC_LOGO_DATA_URI;
-  const effectiveLogoUrl = isOfficialClinicLogoUri(rawLogoUrl)
-    ? getOfficialClinicLogoDataUri(activeModalityColor)
-    : rawLogoUrl;
+  const handleRemoveFromQueue = (id: string) => {
+    setBatchQueue((prev) => prev.filter((r) => r.id !== id));
+  };
 
-  // Sanitize any legacy SVG signature data URI that contained <text> tags so canvas/PNG export never scrambles signature text
-  const rawSignatureUrl = doctor.signatureUrl || '';
-  const effectiveSignatureUrl = rawSignatureUrl.includes('RADIOLOGY')
-    ? rawSignatureUrl.replace(
-        encodeURIComponent(
-          '<text x="62" y="48" font-family="Tahoma, sans-serif" font-size="10" font-weight="bold" fill="#0f766e" text-anchor="middle" opacity="0.85">RADIOLOGY</text>'
-        ),
-        encodeURIComponent(
-          '<path d="M62 24 L65 37 L78 37 L67 45 L71 58 L62 50 L53 58 L57 45 L46 37 L59 37 Z" fill="none" stroke="#0f766e" stroke-width="1.4" opacity="0.55"/>'
-        )
-      )
-    : rawSignatureUrl;
+  const handleMoveQueueItem = (index: number, delta: -1 | 1) => {
+    setBatchQueue((prev) => {
+      const target = index + delta;
+      if (target < 0 || target >= prev.length) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(index, 1);
+      next.splice(target, 0, moved);
+      return next;
+    });
+  };
+
+  const filteredArchiveForPicker = useMemo(() => {
+    const q = queueSearch.trim().toLowerCase();
+    const list = q
+      ? savedReports.filter((rep) => {
+          const name = (rep.patientInfo?.fullName || '').toLowerCase();
+          const adm = (rep.patientInfo?.admissionNumber || '').toLowerCase();
+          const nid = (rep.patientInfo?.nationalId || '').toLowerCase();
+          const dt = (rep.patientInfo?.reportDate || '').toLowerCase();
+          const title = (rep.studies?.[0]?.titleAndTechnique || '').toLowerCase();
+          return (
+            name.includes(q) ||
+            adm.includes(q) ||
+            nid.includes(q) ||
+            dt.includes(q) ||
+            title.includes(q)
+          );
+        })
+      : savedReports;
+    return list.slice(0, 40);
+  }, [savedReports, queueSearch]);
+
+  const recordPrintedStatus = () => {
+    if (isBatchMode) {
+      const archiveIds = batchQueue
+        .filter((r) => r.id !== '__current_editor__')
+        .map((r) => r.id);
+      if (archiveIds.length > 0 && onRecordBatchPrintedReports) {
+        onRecordBatchPrintedReports(archiveIds);
+      }
+      if (batchQueue.some((r) => r.id === '__current_editor__') && onRecordPrintedReport) {
+        onRecordPrintedReport();
+      }
+    } else if (onRecordPrintedReport) {
+      onRecordPrintedReport();
+    }
+  };
 
   // Standalone full-fidelity HTML generator matching multi-page A4 preview 100% (includes Google Web Fonts & guaranteed visible footer)
   const getFullPrintableDocumentHtml = () => {
@@ -299,15 +549,16 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
       // Ignore stylesheet iteration errors
     }
 
+    const baseHref =
+      typeof window !== 'undefined' && window.location.origin ? `${window.location.origin}/` : '/';
+
     return `<!DOCTYPE html>
 <html dir="rtl" lang="fa">
 <head>
   <meta charset="utf-8">
+  <base href="${baseHref}">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>&lrm;</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Amiri:ital,wght@0,400;0,700;1,400;1,700&family=Lalezar&family=Markazi+Text:wght@400..700&family=Noto+Naskh+Arabic:wght@400..700&family=Noto+Sans+Arabic:wght@300..800&family=Readex+Pro:wght@300..700&family=Vazirmatn:wght@100..900&display=swap" rel="stylesheet">
   <style>
     ${compiledCss}
     @page {
@@ -457,7 +708,11 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
 </head>
 <body>
   <div class="floating-action-bar no-print">
-    <span class="font-bold">📄 گزارش رسمی سربرگ‌دار (${paginationResult.totalPages} برگه A4)</span>
+    <span class="font-bold">📄 ${
+      isBatchMode
+        ? `چاپ دسته‌ای (${renderedReports.length} گزارش • ${totalBatchPages} برگه A4)`
+        : `گزارش رسمی سربرگ‌دار (${paginationResult.totalPages} برگه A4)`
+    }</span>
     <span class="text-xs text-teal-300">💡 در پنجره پرینت، تیک Headers and Footers را بردارید</span>
     <button class="btn-trigger-print" onclick="window.print()">🖨️ چاپ سربرگ / ذخیره PDF (Ctrl+P)</button>
   </div>
@@ -470,12 +725,12 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
         document.fonts.ready.then(function() {
           setTimeout(function() {
             try { window.print(); } catch(e) {}
-          }, 350);
+          }, 250);
         });
       } else {
         setTimeout(function() {
           try { window.print(); } catch(e) {}
-        }, 500);
+        }, 350);
       }
     };
   </script>
@@ -484,9 +739,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   };
 
   const handlePrint = () => {
-    if (onRecordPrintedReport) {
-      onRecordPrintedReport();
-    }
+    recordPrintedStatus();
     setPrintSuccessFeedback(true);
     setTimeout(() => setPrintSuccessFeedback(false), 4500);
 
@@ -598,34 +851,170 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Multi-Page True 300-DPI Native Canvas A4 PNG Export (Zero <foreignObject> blur or disconnected letters)
+  // Multi-Page True 300-DPI Native Canvas A4 PNG Export (Supports Single & Simultaneous Batch Multi-Report Export)
   const handleExportPngImage = async () => {
     if (isExportingImage || isExportingPdf) return;
     setIsExportingImage(true);
     try {
-      if (onRecordPrintedReport) {
-        onRecordPrintedReport();
+      recordPrintedStatus();
+
+      const totalPagesAll = totalBatchPages;
+      let exportedCount = 0;
+
+      for (let rIdx = 0; rIdx < renderedReports.length; rIdx++) {
+        const entry = renderedReports[rIdx];
+        const total = entry.pagination.totalPages;
+        const safeName = (entry.patientInfo.fullName || 'Patient').replace(/[\\/:*?"<>|]+/g, '_');
+        const safeId = (
+          entry.patientInfo.nationalId ||
+          entry.patientInfo.admissionNumber ||
+          `Report_${rIdx + 1}`
+        ).replace(/[\\/:*?"<>|]+/g, '_');
+        const baseName = `Report_Image_${safeId}_${safeName}`;
+
+        let entryQr = qrMap[entry.key] || '';
+        if (!entryQr) {
+          try {
+            const payload = buildQrPayloadForEntry(
+              entry.patientInfo,
+              entry.studies,
+              entry.doctor,
+              qrMode
+            );
+            entryQr = await QRCode.toDataURL(payload, {
+              width: 320,
+              margin: 2,
+              errorCorrectionLevel: 'L',
+              color: { dark: '#000000', light: '#ffffff' },
+            });
+          } catch {}
+        }
+
+        for (let i = 0; i < total; i++) {
+          const sheet = entry.pagination.pages[i];
+          if (!sheet) continue;
+
+          exportedCount++;
+          if (isBatchMode || totalPagesAll > 1) {
+            setBatchProgress({
+              kind: 'png',
+              current: exportedCount,
+              total: totalPagesAll,
+              label: `${entry.patientInfo.fullName || 'بیمار'} (برگه ${i + 1} از ${total})`,
+            });
+          }
+
+          const canvas = await renderTrueVectorCanvasPage({
+            patientInfo: entry.patientInfo,
+            studies: entry.studies,
+            doctor: entry.doctor,
+            settings,
+            sheet,
+            totalPages: total,
+            effectiveLogoUrl: entry.effectiveLogoUrl,
+            effectiveSignatureUrl: entry.effectiveSignatureUrl,
+            qrDataUrl: entryQr,
+            qrMode,
+            monochromePrintMode,
+            preprintedLetterheadMode,
+            preprintedTopMarginMm,
+            headerFontCss: resolvedHeaderFontCss,
+            headerFontSize,
+            headingFontCss: resolvedHeadingFontCss,
+            headingFontSize,
+            bodyFontCss: resolvedBodyFontCss,
+            bodyFontSize: bodyFontSize || 14,
+            doctorStampFontCss: entry.resolvedDoctorStampFontCss,
+            doctorStampFontSize: entry.resolvedDoctorStampFontSize,
+            lineHeight: unifiedLineHeight,
+            dpiScale: 11.811, // True 300 DPI (2480 x 3508 px)
+          });
+
+          const blob = await new Promise<Blob | null>((resolve) =>
+            canvas.toBlob((b) => resolve(b), 'image/png')
+          );
+          const downloadUrl = blob ? URL.createObjectURL(blob) : canvas.toDataURL('image/png');
+          const link = document.createElement('a');
+          link.download = total > 1 ? `${baseName}_Page${i + 1}.png` : `${baseName}.png`;
+          link.href = downloadUrl;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          if (blob) {
+            setTimeout(() => URL.revokeObjectURL(downloadUrl), 6000);
+          }
+
+          // Space out multi-file browser downloads slightly so Chrome/Edge never throttles them
+          if (totalPagesAll > 1) {
+            await new Promise((res) => setTimeout(res, 320));
+          }
+        }
       }
 
-      const total = paginationResult.totalPages;
-      const baseName = `Report_Image_${patientInfo.nationalId || patientInfo.admissionNumber || 'Radiology'}_${
-        patientInfo.fullName || 'Patient'
-      }`;
+      setShareFeedback(
+        isBatchMode
+          ? `✓ ${exportedCount} فایل تصویر ۳۰۰ DPI واقعی PNG برای ${renderedReports.length} گزارش با موفقیت دانلود شد.`
+          : totalPagesAll > 1
+          ? `✓ ${totalPagesAll} برگه تصویر ۳۰۰ DPI واقعی PNG (برگه ۱ تا ${totalPagesAll}) با فونت کاملاً پیوسته و شارپ دانلود شد.`
+          : '✓ تصویر ۳۰۰ DPI واقعی PNG برگه گزارش با فونت کاملاً پیوسته و شارپ دانلود شد.'
+      );
+      setTimeout(() => setShareFeedback(''), 5000);
+    } catch (err) {
+      console.warn('PNG export warning:', err);
+    } finally {
+      setBatchProgress(null);
+      setIsExportingImage(false);
+    }
+  };
 
-      for (let i = 0; i < total; i++) {
-        const sheet = paginationResult.pages[i];
-        if (!sheet) continue;
+  // Direct Multi-Page True Vector A4 PDF File Download (Supports Single & Simultaneous Batch Multi-Report Export)
+  const handleExportPdfFile = async () => {
+    if (isExportingPdf || isExportingImage) return;
+    setIsExportingPdf(true);
+    try {
+      recordPrintedStatus();
 
-        const canvas = await renderTrueVectorCanvasPage({
-          patientInfo,
-          studies,
-          doctor,
+      for (let rIdx = 0; rIdx < renderedReports.length; rIdx++) {
+        const entry = renderedReports[rIdx];
+        const total = entry.pagination.totalPages;
+
+        if (isBatchMode) {
+          setBatchProgress({
+            kind: 'pdf',
+            current: rIdx + 1,
+            total: renderedReports.length,
+            label: `${entry.patientInfo.fullName || 'بیمار'} (${total} صفحه A4)`,
+          });
+        }
+
+        let entryQr = qrMap[entry.key] || '';
+        if (!entryQr) {
+          try {
+            const payload = buildQrPayloadForEntry(
+              entry.patientInfo,
+              entry.studies,
+              entry.doctor,
+              qrMode
+            );
+            entryQr = await QRCode.toDataURL(payload, {
+              width: 320,
+              margin: 2,
+              errorCorrectionLevel: 'L',
+              color: { dark: '#000000', light: '#ffffff' },
+            });
+          } catch {}
+        }
+
+        await exportTrueVectorPdfReport({
+          patientInfo: entry.patientInfo,
+          studies: entry.studies,
+          doctor: entry.doctor,
           settings,
-          sheet,
+          pages: entry.pagination.pages,
           totalPages: total,
-          effectiveLogoUrl,
-          effectiveSignatureUrl,
-          qrDataUrl,
+          effectiveLogoUrl: entry.effectiveLogoUrl,
+          effectiveSignatureUrl: entry.effectiveSignatureUrl,
+          qrDataUrl: entryQr,
           qrMode,
           monochromePrintMode,
           preprintedLetterheadMode,
@@ -636,86 +1025,31 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
           headingFontSize,
           bodyFontCss: resolvedBodyFontCss,
           bodyFontSize: bodyFontSize || 14,
-          doctorStampFontCss: resolvedDoctorStampFontCss,
-          doctorStampFontSize: resolvedDoctorStampFontSize,
+          doctorStampFontCss: entry.resolvedDoctorStampFontCss,
+          doctorStampFontSize: entry.resolvedDoctorStampFontSize,
           lineHeight: unifiedLineHeight,
-          dpiScale: 11.811, // True 300 DPI (2480 x 3508 px)
         });
 
-        const blob = await new Promise<Blob | null>((resolve) =>
-          canvas.toBlob((b) => resolve(b), 'image/png')
-        );
-        const downloadUrl = blob ? URL.createObjectURL(blob) : canvas.toDataURL('image/png');
-        const link = document.createElement('a');
-        link.download = total > 1 ? `${baseName}_Page${i + 1}.png` : `${baseName}.png`;
-        link.href = downloadUrl;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        if (blob) {
-          setTimeout(() => URL.revokeObjectURL(downloadUrl), 5000);
+        // Brief pause between sequential PDF downloads so browser saves every file reliably
+        if (renderedReports.length > 1 && rIdx < renderedReports.length - 1) {
+          await new Promise((res) => setTimeout(res, 380));
         }
       }
 
       setShareFeedback(
-        total > 1
-          ? `✓ ${total} برگه تصویر ۳۰۰ DPI واقعی PNG (برگه ۱ تا ${total}) با فونت کاملاً پیوسته و شارپ دانلود شد.`
-          : '✓ تصویر ۳۰۰ DPI واقعی PNG برگه گزارش با فونت کاملاً پیوسته و شارپ دانلود شد.'
-      );
-      setTimeout(() => setShareFeedback(''), 4000);
-    } catch (err) {
-      console.warn('PNG export warning:', err);
-    } finally {
-      setIsExportingImage(false);
-    }
-  };
-
-  // Direct Multi-Page True Vector A4 PDF File Download (100% Vector Text & Shapes, NOT a rasterized image!)
-  const handleExportPdfFile = async () => {
-    if (isExportingPdf || isExportingImage) return;
-    setIsExportingPdf(true);
-    try {
-      if (onRecordPrintedReport) {
-        onRecordPrintedReport();
-      }
-
-      const total = paginationResult.totalPages;
-      await exportTrueVectorPdfReport({
-        patientInfo,
-        studies,
-        doctor,
-        settings,
-        pages: paginationResult.pages,
-        totalPages: total,
-        effectiveLogoUrl,
-        effectiveSignatureUrl,
-        qrDataUrl,
-        qrMode,
-        monochromePrintMode,
-        preprintedLetterheadMode,
-        preprintedTopMarginMm,
-        headerFontCss: resolvedHeaderFontCss,
-        headerFontSize,
-        headingFontCss: resolvedHeadingFontCss,
-        headingFontSize,
-        bodyFontCss: resolvedBodyFontCss,
-        bodyFontSize: bodyFontSize || 14,
-        doctorStampFontCss: resolvedDoctorStampFontCss,
-        doctorStampFontSize: resolvedDoctorStampFontSize,
-        lineHeight: unifiedLineHeight,
-      });
-
-      setShareFeedback(
-        total > 1
-          ? `✓ فایل PDF (${total} صفحه A4) با موفقیت دانلود شد.`
+        isBatchMode
+          ? `✓ ${renderedReports.length} فایل PDF مجزا (${totalBatchPages} صفحه A4) با موفقیت دانلود شد.`
+          : paginationResult.totalPages > 1
+          ? `✓ فایل PDF (${paginationResult.totalPages} صفحه A4) با موفقیت دانلود شد.`
           : '✓ فایل PDF گزارش A4 با موفقیت دانلود شد.'
       );
-      setTimeout(() => setShareFeedback(''), 4000);
+      setTimeout(() => setShareFeedback(''), 5000);
     } catch (err) {
       console.error('PDF export error:', err);
       setShareFeedback('خطا در تولید فایل PDF. لطفاً مجدداً تلاش کنید.');
       setTimeout(() => setShareFeedback(''), 4000);
     } finally {
+      setBatchProgress(null);
       setIsExportingPdf(false);
     }
   };
@@ -752,14 +1086,14 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
       if (typeof navigator !== 'undefined' && navigator.share && firstSheet) {
         try {
           const canvas = await renderTrueVectorCanvasPage({
-            patientInfo,
-            studies,
-            doctor,
+            patientInfo: primaryEntry.patientInfo,
+            studies: primaryEntry.studies,
+            doctor: primaryEntry.doctor,
             settings,
             sheet: firstSheet,
             totalPages: paginationResult.totalPages,
-            effectiveLogoUrl,
-            effectiveSignatureUrl,
+            effectiveLogoUrl: primaryEntry.effectiveLogoUrl,
+            effectiveSignatureUrl: primaryEntry.effectiveSignatureUrl,
             qrDataUrl,
             qrMode,
             monochromePrintMode,
@@ -771,8 +1105,8 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
             headingFontSize,
             bodyFontCss: resolvedBodyFontCss,
             bodyFontSize: bodyFontSize || 14,
-            doctorStampFontCss: resolvedDoctorStampFontCss,
-            doctorStampFontSize: resolvedDoctorStampFontSize,
+            doctorStampFontCss: primaryEntry.resolvedDoctorStampFontCss,
+            doctorStampFontSize: primaryEntry.resolvedDoctorStampFontSize,
             lineHeight: unifiedLineHeight,
             dpiScale: 10,
           });
@@ -844,16 +1178,22 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <h3 className="font-bold text-sm sm:text-base">
-                    پیش‌نمایش چاپ سربرگ رسمی و صدور گزارش (A4)
+                    {isBatchMode
+                      ? `صف چاپ و خروجی دسته‌ای (${renderedReports.length} گزارش)`
+                      : 'پیش‌نمایش چاپ سربرگ رسمی و صدور گزارش (A4)'}
                   </h3>
                   <span
                     className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border ${
-                      paginationResult.totalPages > 1
+                      isBatchMode
+                        ? 'bg-emerald-500/20 text-emerald-200 border-emerald-400/40'
+                        : paginationResult.totalPages > 1
                         ? 'bg-amber-500/20 text-amber-200 border-amber-400/40'
                         : 'bg-teal-500/20 text-teal-200 border-teal-400/40'
                     }`}
                   >
-                    {paginationResult.totalPages === 1
+                    {isBatchMode
+                      ? `${renderedReports.length} بیمار • مجموعاً ${totalBatchPages} برگه A4 آماده چاپ یکجا`
+                      : paginationResult.totalPages === 1
                       ? `۱ برگه A4 (${paginationResult.fillPercent}% پر شده • ${paginationResult.remainingLinesPage1} خط مانده)`
                       : `${paginationResult.totalPages} برگه مجزای A4 (${paginationResult.fillPercent}%)`}
                   </span>
@@ -861,21 +1201,41 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                 <p className="text-[11px] text-teal-300 flex items-center gap-1 mt-0.5">
                   <Info className="w-3.5 h-3.5 text-teal-400 shrink-0" />
                   <span className="truncate">
-                    فوتر و مهر پزشک در پایین هر برگه A4 قفل شده است • در پنجره پرینت تیک Headers and footers را بردارید.
+                    {isBatchMode
+                      ? 'با یک کلیک همه گزارش‌های صف به چاپگر ارسال می‌شوند یا همزمان فایل‌های PDF و PNG مجزا برای هر بیمار ساخته می‌شود.'
+                      : 'فوتر و مهر پزشک در پایین هر برگه A4 قفل شده است • در پنجره پرینت تیک Headers and footers را بردارید.'}
                   </span>
                 </p>
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={onClose}
-              title="بستن پنجره پیش‌نمایش چاپ (Esc)"
-              className="h-9 px-3 rounded-xl bg-slate-800 hover:bg-rose-600 text-slate-200 hover:text-white border border-slate-700 hover:border-rose-500 flex items-center gap-1.5 text-xs font-bold shrink-0 transition-colors cursor-pointer"
-            >
-              <span>بستن</span>
-              <X className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setShowQueuePanel((v) => !v)}
+                className={`h-9 px-3 rounded-xl border flex items-center gap-1.5 text-xs font-bold transition-colors cursor-pointer ${
+                  showQueuePanel || isBatchMode
+                    ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 border-amber-400 shadow-xs'
+                    : 'bg-slate-800 hover:bg-slate-700 text-amber-300 border-slate-700'
+                }`}
+                title="مدیریت صف چاپ، PDF و PNG دسته‌ای چند گزارش همزمان"
+              >
+                <Layers className="w-4 h-4" />
+                <span>
+                  {isBatchMode ? `صف چاپ دسته‌ای (${batchQueue.length})` : 'صف چاپ دسته‌ای'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={onClose}
+                title="بستن پنجره پیش‌نمایش چاپ (Esc)"
+                className="h-9 px-3 rounded-xl bg-slate-800 hover:bg-rose-600 text-slate-200 hover:text-white border border-slate-700 hover:border-rose-500 flex items-center gap-1.5 text-xs font-bold shrink-0 transition-colors cursor-pointer"
+              >
+                <span>بستن</span>
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
           {/* Row 2: Dedicated Action Toolbar + Live Header & Body Font/Size, Line-Height & Modality Color Controls */}
@@ -1045,36 +1405,60 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                 <span>Word</span>
               </button>
 
-              {/* Multi-Page High-Res PNG Image Export */}
+              {/* Multi-Page / Batch High-Res PNG Image Export */}
               <button
                 type="button"
                 disabled={isExportingImage || isExportingPdf}
                 onClick={handleExportPngImage}
                 className="h-8 flex items-center gap-1.5 text-xs font-bold px-3 bg-indigo-900/90 hover:bg-indigo-800 text-indigo-100 border border-indigo-700 rounded-xl transition-colors shadow-xs cursor-pointer disabled:opacity-50"
-                title="خروجی تصویر باکیفیت و شارپ (PNG) از تمام برگه‌های A4 گزارش"
+                title={
+                  isBatchMode
+                    ? 'ساخت و دانلود همزمان فایل‌های PNG ۳۰۰ DPI برای همه گزارش‌های موجود در صف'
+                    : 'خروجی تصویر باکیفیت و شارپ (PNG) از تمام برگه‌های A4 گزارش'
+                }
               >
-                <ImageIcon className="w-3.5 h-3.5 text-indigo-300" />
+                {isExportingImage ? (
+                  <Loader2 className="w-3.5 h-3.5 text-indigo-300 animate-spin" />
+                ) : (
+                  <ImageIcon className="w-3.5 h-3.5 text-indigo-300" />
+                )}
                 <span>
                   {isExportingImage
-                    ? 'در حال ساخت PNG...'
+                    ? batchProgress?.kind === 'png'
+                      ? `ساخت PNG (${batchProgress.current}/${batchProgress.total})...`
+                      : 'در حال ساخت PNG...'
+                    : isBatchMode
+                    ? `ذخیره همزمان ${totalBatchPages} PNG`
                     : paginationResult.totalPages > 1
                     ? `ذخیره PNG (${paginationResult.totalPages} برگه)`
                     : 'ذخیره PNG'}
                 </span>
               </button>
 
-              {/* Direct Multi-Page PDF Download */}
+              {/* Direct Multi-Page / Batch PDF Download */}
               <button
                 type="button"
                 disabled={isExportingPdf || isExportingImage}
                 onClick={handleExportPdfFile}
                 className="h-8 flex items-center gap-1.5 text-xs font-bold px-3 bg-rose-700 hover:bg-rose-600 text-white border border-rose-500 rounded-xl transition-colors shadow-xs cursor-pointer disabled:opacity-50"
-                title="دانلود مستقیم فایل PDF استاندارد A4 روی سیستم"
+                title={
+                  isBatchMode
+                    ? 'ساخت و دانلود همزمان فایل‌های PDF مجزای A4 برای تک‌تک بیماران صف'
+                    : 'دانلود مستقیم فایل PDF استاندارد A4 روی سیستم'
+                }
               >
-                <FileDown className="w-4 h-4 text-rose-200" />
+                {isExportingPdf ? (
+                  <Loader2 className="w-3.5 h-3.5 text-rose-200 animate-spin" />
+                ) : (
+                  <FileDown className="w-4 h-4 text-rose-200" />
+                )}
                 <span>
                   {isExportingPdf
-                    ? 'در حال ساخت PDF...'
+                    ? batchProgress?.kind === 'pdf'
+                      ? `ساخت PDF (${batchProgress.current}/${batchProgress.total})...`
+                      : 'در حال ساخت PDF...'
+                    : isBatchMode
+                    ? `ذخیره همزمان ${renderedReports.length} PDF`
                     : paginationResult.totalPages > 1
                     ? `ذخیره مستقیم PDF (${paginationResult.totalPages} صفحه)`
                     : 'ذخیره مستقیم PDF'}
@@ -1082,15 +1466,17 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
               </button>
 
               {/* Quick Share */}
-              <button
-                type="button"
-                disabled={isExportingImage || isExportingPdf}
-                onClick={handleQuickShareReport}
-                className="h-8 flex items-center gap-1.5 text-xs font-bold px-3 bg-emerald-900/90 hover:bg-emerald-800 text-emerald-100 border border-emerald-700 rounded-xl transition-colors shadow-xs cursor-pointer disabled:opacity-50"
-              >
-                <Share2 className="w-3.5 h-3.5 text-emerald-300" />
-                <span>اشتراک‌گذاری</span>
-              </button>
+              {!isBatchMode && (
+                <button
+                  type="button"
+                  disabled={isExportingImage || isExportingPdf}
+                  onClick={handleQuickShareReport}
+                  className="h-8 flex items-center gap-1.5 text-xs font-bold px-3 bg-emerald-900/90 hover:bg-emerald-800 text-emerald-100 border border-emerald-700 rounded-xl transition-colors shadow-xs cursor-pointer disabled:opacity-50"
+                >
+                  <Share2 className="w-3.5 h-3.5 text-emerald-300" />
+                  <span>اشتراک‌گذاری</span>
+                </button>
+              )}
 
               {/* Standalone Printable HTML */}
               <button
@@ -1102,17 +1488,231 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                 <span>فایل HTML</span>
               </button>
 
-              {/* Standard Print Button */}
+              {/* Standard / Batch Single-Job Print Button */}
               <button
                 type="button"
                 onClick={handlePrint}
                 className="group h-8 flex items-center gap-1.5 text-xs font-bold px-3.5 bg-teal-500 hover:bg-teal-400 text-slate-950 rounded-xl transition-all duration-200 active:scale-95 shadow-xs cursor-pointer"
               >
                 <PaperFeedPrinterIcon activeFeed={printSuccessFeedback} className="w-4 h-4" />
-                <span>{printSuccessFeedback ? 'در حال چاپ سربرگ...' : 'چاپ مستقیم (Print)'}</span>
+                <span>
+                  {printSuccessFeedback
+                    ? 'در حال ارسال به چاپگر...'
+                    : isBatchMode
+                    ? `چاپ دسته‌ای همه (${renderedReports.length} گزارش • ${totalBatchPages} برگه)`
+                    : 'چاپ مستقیم (Print)'}
+                </span>
               </button>
             </div>
           </div>
+
+          {/* Interactive Batch Print / PDF / PNG Queue Manager Panel */}
+          {showQueuePanel && (
+            <div className="px-4 sm:px-5 py-3 bg-slate-950/95 border-t border-slate-700 space-y-3 animate-fadeIn">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2 text-xs font-black text-amber-300">
+                  <Layers className="w-4 h-4" />
+                  <span>
+                    مدیریت صف چاپ، PDF و PNG دسته‌ای ({batchQueue.length} گزارش در صف)
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={handleAddCurrentEditorToQueue}
+                    className="px-2.5 py-1 rounded-lg bg-teal-900/90 hover:bg-teal-800 text-teal-100 border border-teal-700 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>افزودن گزارش فعلی ویرایشگر</span>
+                  </button>
+                  {savedReports.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleAddTodaysReportsToQueue}
+                      className="px-2.5 py-1 rounded-lg bg-indigo-900/90 hover:bg-indigo-800 text-indigo-100 border border-indigo-700 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      <CalendarCheck className="w-3.5 h-3.5" />
+                      <span>افزودن همه گزارش‌های امروز</span>
+                    </button>
+                  )}
+                  {batchQueue.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setBatchQueue([])}
+                      className="px-2.5 py-1 rounded-lg bg-rose-950 hover:bg-rose-900 text-rose-200 border border-rose-800 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>خالی کردن صف (حالت تکی)</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                {/* Right Column: Queued Items List */}
+                <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-2.5 space-y-1.5 max-h-44 overflow-y-auto">
+                  <div className="text-[11px] font-bold text-slate-300 flex items-center justify-between px-1 pb-1 border-b border-slate-800">
+                    <span>لیست آماده چاپ و خروجی (به ترتیب):</span>
+                    <span className="text-teal-400 font-mono">
+                      {isBatchMode ? `${totalBatchPages} برگه A4` : 'حالت تکی'}
+                    </span>
+                  </div>
+                  {batchQueue.length === 0 ? (
+                    <div className="text-[11px] text-slate-400 py-4 text-center leading-relaxed">
+                      صف دسته‌ای خالی است (در حال پیش‌نمایش گزارش تکی فعلی). از کادر کناری گزارش‌های آرشیو را اضافه کنید تا همگی در یک نوبت چاپ یا به چند PDF/PNG تبدیل شوند.
+                    </div>
+                  ) : (
+                    batchQueue.map((rep, idx) => {
+                      const entryMatch = renderedReports.find((e) => e.key === rep.id);
+                      const pagesCount = entryMatch?.pagination.totalPages || 1;
+                      return (
+                        <div
+                          key={rep.id}
+                          className="flex items-center justify-between gap-2 bg-slate-800/90 hover:bg-slate-800 px-2.5 py-1.5 rounded-lg border border-slate-700 text-[11px]"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => {
+                              reportBlockRefs.current[rep.id]?.scrollIntoView({
+                                behavior: 'smooth',
+                                block: 'start',
+                              });
+                            }}
+                            className="flex items-center gap-2 min-w-0 text-right flex-1 cursor-pointer"
+                            title="پرش به پیش‌نمایش این بیمار"
+                          >
+                            <span className="w-5 h-5 rounded-md bg-teal-500/20 text-teal-300 font-mono font-black flex items-center justify-center shrink-0">
+                              {idx + 1}
+                            </span>
+                            <div className="min-w-0">
+                              <div className="font-bold text-white truncate">
+                                {rep.patientInfo?.fullName || 'بیمار بدون نام'}
+                                {rep.id === '__current_editor__' && (
+                                  <span className="mr-1.5 text-[10px] text-amber-300">(ویرایشگر فعلی)</span>
+                                )}
+                              </div>
+                              <div className="text-[10px] text-slate-400 font-mono truncate">
+                                پذیرش: {rep.patientInfo?.admissionNumber || '---'} • {pagesCount} برگه
+                              </div>
+                            </div>
+                          </button>
+
+                          <div className="flex items-center gap-0.5 shrink-0">
+                            <button
+                              type="button"
+                              disabled={idx === 0}
+                              onClick={() => handleMoveQueueItem(idx, -1)}
+                              className="p-1 text-slate-400 hover:text-white disabled:opacity-30 cursor-pointer"
+                              title="انتقال به بالا"
+                            >
+                              <ChevronUp className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={idx === batchQueue.length - 1}
+                              onClick={() => handleMoveQueueItem(idx, 1)}
+                              className="p-1 text-slate-400 hover:text-white disabled:opacity-30 cursor-pointer"
+                              title="انتقال به پایین"
+                            >
+                              <ChevronDown className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveFromQueue(rep.id)}
+                              className="p-1 text-slate-400 hover:text-rose-400 cursor-pointer"
+                              title="حذف از صف"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                {/* Left Column: Quick Archive Picker */}
+                <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-2.5 space-y-2 max-h-44 flex flex-col">
+                  <div className="relative shrink-0">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={queueSearch}
+                      onChange={(e) => setQueueSearch(e.target.value)}
+                      placeholder="جستجو در آرشیو (نام بیمار، شماره پذیرش، تاریخ) جهت افزودن..."
+                      className="w-full h-7 pr-8 pl-2.5 rounded-lg bg-slate-800 border border-slate-700 text-[11px] text-white placeholder-slate-400 focus:outline-none focus:border-teal-500"
+                    />
+                  </div>
+                  <div className="flex-1 overflow-y-auto space-y-1">
+                    {filteredArchiveForPicker.length === 0 ? (
+                      <div className="text-[11px] text-slate-500 text-center py-3">
+                        گزارشی در آرشیو یافت نشد.
+                      </div>
+                    ) : (
+                      filteredArchiveForPicker.map((rep) => {
+                        const inQueue = batchQueue.some((q) => q.id === rep.id);
+                        return (
+                          <button
+                            key={rep.id}
+                            type="button"
+                            onClick={() =>
+                              inQueue ? handleRemoveFromQueue(rep.id) : handleAddReportToQueue(rep)
+                            }
+                            className={`w-full px-2.5 py-1.5 rounded-lg border text-right flex items-center justify-between gap-2 text-[11px] transition-colors cursor-pointer ${
+                              inQueue
+                                ? 'bg-teal-950/80 border-teal-600 text-teal-100'
+                                : 'bg-slate-800/60 hover:bg-slate-800 border-slate-700/80 text-slate-200'
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <span className="font-bold truncate block">
+                                {rep.patientInfo?.fullName || 'بیمار بدون نام'}
+                              </span>
+                              <span className="text-[10px] text-slate-400 font-mono">
+                                {rep.patientInfo?.admissionNumber || '---'} • {rep.patientInfo?.reportDate || '---'}
+                              </span>
+                            </div>
+                            <span
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold shrink-0 ${
+                                inQueue
+                                  ? 'bg-teal-500 text-slate-950'
+                                  : 'bg-slate-700 text-slate-200'
+                              }`}
+                            >
+                              {inQueue ? '✓ در صف' : '+ افزودن'}
+                            </span>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Live Batch PDF / PNG Export Progress Strip */}
+          {batchProgress && (
+            <div className="px-5 py-2 bg-indigo-950/95 border-t border-indigo-700 text-indigo-100 text-xs font-bold flex items-center justify-between gap-3 animate-fadeIn">
+              <div className="flex items-center gap-2 min-w-0">
+                <Loader2 className="w-4 h-4 text-indigo-300 animate-spin shrink-0" />
+                <span className="truncate">
+                  {batchProgress.kind === 'pdf'
+                    ? `در حال ساخت فایل PDF شماره ${batchProgress.current} از ${batchProgress.total}: ${batchProgress.label}`
+                    : `در حال ساخت تصویر ۳۰۰ DPI PNG شماره ${batchProgress.current} از ${batchProgress.total}: ${batchProgress.label}`}
+                </span>
+              </div>
+              <div className="w-32 sm:w-44 h-2 bg-indigo-900 rounded-full overflow-hidden shrink-0">
+                <div
+                  className="h-full bg-teal-400 transition-all duration-300"
+                  style={{
+                    width: `${Math.min(100, Math.round((batchProgress.current / batchProgress.total) * 100))}%`,
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
           {shareFeedback && (
             <div className="px-5 py-1.5 bg-emerald-950/90 border-t border-emerald-800 text-emerald-200 text-xs font-bold flex items-center justify-between animate-fadeIn">
               <span>{shareFeedback}</span>
@@ -1127,214 +1727,255 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
           )}
         </div>
 
-        {/* Printable Multi-Page A4 Sheets Viewport */}
+        {/* Printable Multi-Page A4 Sheets Viewport (Supports Single & Multi-Report Batch Print Queue) */}
         <div className="flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-6 md:p-8 flex flex-col items-center bg-slate-300/85 min-h-0">
           <div ref={printAreaRef} className="w-full flex flex-col items-center gap-8">
-            {paginationResult.pages.map((sheet, pageIdx) => (
-              <div key={sheet.pageNumber} className="w-full max-w-[210mm] flex flex-col items-center">
-                {/* Page Indicator Pill above each sheet in Preview (Hidden in Print) */}
-                {paginationResult.totalPages > 1 && (
-                  <div className="no-print mb-2 px-3.5 py-1 rounded-full bg-slate-900/90 text-white text-xs font-bold shadow-md flex items-center gap-2">
-                    <span>
-                      📄 برگه {sheet.pageNumber} از {paginationResult.totalPages} (کاغذ استاندارد A4)
-                    </span>
-                    <span className="text-teal-300 font-mono text-[11px]">
-                      • {sheet.fillPercent}% ظرفیت این برگه
-                    </span>
-                  </div>
-                )}
-
-                {/* Discrete A4 Paper Sheet (210mm x 297mm) with Footer Pinned to Bottom (mt-auto) */}
+            {renderedReports.map((entry, reportIdx) => {
+              const entryQrDataUrl = qrMap[entry.key] || '';
+              return (
                 <div
+                  key={entry.key}
                   ref={(el) => {
-                    pageRefs.current[pageIdx] = el;
+                    reportBlockRefs.current[entry.key] = el;
                   }}
-                  className={`printable-report a4-sheet-page bg-white text-slate-950 w-full max-w-[210mm] min-h-[297mm] p-6 sm:p-10 md:p-11 shadow-2xl rounded-2xl relative overflow-hidden box-border break-words [word-break:break-word] shrink-0 flex flex-col justify-between ${
-                    monochromePrintMode ? 'grayscale contrast-125' : ''
-                  }`}
-                  style={
-                    {
-                      '--heading-font-family': resolvedHeadingFontCss,
-                      '--heading-font-size': `${headingFontSize}px`,
-                      fontFamily: resolvedBodyFontCss,
-                      fontSize: `${bodyFontSize || 14}px`,
-                      lineHeight: unifiedLineHeight,
-                      direction: 'rtl',
-                      color: '#050811',
-                      WebkitFontSmoothing: 'antialiased',
-                      textRendering: 'geometricPrecision',
-                      paddingTop: preprintedLetterheadMode ? `${preprintedTopMarginMm}mm` : undefined,
-                    } as React.CSSProperties
-                  }
+                  className="w-full flex flex-col items-center gap-6"
                 >
-                  {/* Ultra-Faint Centered Clinic Logo Watermark in the Background of the Printed Report */}
-                  {!preprintedLetterheadMode && effectiveLogoUrl && (
-                    <div
-                      aria-hidden="true"
-                      className="a4-watermark-logo pointer-events-none select-none absolute inset-0 flex items-center justify-center z-0 overflow-hidden"
-                      style={{
-                        position: 'absolute',
-                        inset: 0,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        pointerEvents: 'none',
-                        zIndex: 0,
-                        overflow: 'hidden',
-                      }}
-                    >
-                      <img
-                        src={effectiveLogoUrl}
-                        alt=""
-                        className="w-[92mm] h-[92mm] object-contain"
-                        style={{
-                          width: '92mm',
-                          height: '92mm',
-                          objectFit: 'contain',
-                          opacity: 0.065,
-                        }}
-                      />
+                  {/* Batch Patient Divider Banner (Preview Only - Hidden on Print) */}
+                  {isBatchMode && (
+                    <div className="no-print w-full max-w-[210mm] px-4 py-2 rounded-2xl bg-slate-900 text-white shadow-md border border-slate-700 flex items-center justify-between gap-2 text-xs">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="px-2 py-0.5 rounded-lg bg-teal-500 text-slate-950 font-black shrink-0">
+                          گزارش {reportIdx + 1} از {renderedReports.length}
+                        </span>
+                        <span className="font-bold truncate">
+                          {entry.patientInfo.fullName || 'بیمار بدون نام'}
+                        </span>
+                        <span className="text-slate-400 font-mono text-[11px] shrink-0">
+                          (پذیرش: {entry.patientInfo.admissionNumber || '---'} • {entry.pagination.totalPages} برگه)
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveFromQueue(entry.key)}
+                        className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-rose-600 text-slate-300 hover:text-white text-[11px] font-bold transition-colors cursor-pointer shrink-0"
+                      >
+                        حذف از صف
+                      </button>
                     </div>
                   )}
 
-                  {/* TOP SECTION: Official Clinic Letterhead + Patient Demographics Box */}
-                  <header
-                    className="printable-header-section relative z-10 shrink-0"
-                    style={
-                      {
-                        '--header-font-family': resolvedHeaderFontCss,
-                        fontFamily: resolvedHeaderFontCss,
-                      } as React.CSSProperties
-                    }
-                  >
-                    {!preprintedLetterheadMode ? (
-                      <div
-                        className="pb-3 border-b-2 flex items-center justify-between gap-4"
-                        style={{
-                          borderColor: monochromePrintMode ? '#000000' : activeModalityColor,
-                        }}
-                      >
-                        <div className="flex items-center gap-3.5">
-                          <img
-                            src={effectiveLogoUrl}
-                            alt="لوگوی مرکز"
-                            className="w-14 h-14 sm:w-16 sm:h-16 object-contain shrink-0 rounded-lg"
-                          />
-                          <div className="space-y-1">
-                            <h1
-                              className="font-black text-slate-950 leading-snug"
-                              style={{
-                                fontFamily: resolvedHeaderFontCss,
-                                fontSize: `${headerFontSize}px`,
-                              }}
-                            >
-                              {clinicNameDisplay}
-                            </h1>
-                            <p
-                              className="font-extrabold"
-                              style={{
-                                fontFamily: resolvedHeaderFontCss,
-                                fontSize: `${Math.max(11, Math.round(headerFontSize * 0.67))}px`,
-                                color: monochromePrintMode ? '#000000' : activeModalityColor,
-                              }}
-                            >
-                              {clinicSubtitleDisplay}
-                            </p>
-                            <p
-                              className="text-slate-800 font-semibold"
-                              style={{
-                                fontFamily: resolvedHeaderFontCss,
-                                fontSize: `${Math.max(10, Math.round(headerFontSize * 0.58))}px`,
-                              }}
-                            >
-                              {clinicAddressDisplay} • تلفن: {clinicPhoneDisplay}
-                            </p>
-                          </div>
+                  {entry.pagination.pages.map((sheet, pageIdx) => (
+                    <div
+                      key={`${entry.key}-p${sheet.pageNumber}`}
+                      className="w-full max-w-[210mm] flex flex-col items-center"
+                    >
+                      {/* Page Indicator Pill above each sheet in Preview (Hidden in Print) */}
+                      {entry.pagination.totalPages > 1 && (
+                        <div className="no-print mb-2 px-3.5 py-1 rounded-full bg-slate-900/90 text-white text-xs font-bold shadow-md flex items-center gap-2">
+                          <span>
+                            📄 برگه {sheet.pageNumber} از {entry.pagination.totalPages} (کاغذ استاندارد A4)
+                          </span>
+                          <span className="text-teal-300 font-mono text-[11px]">
+                            • {sheet.fillPercent}% ظرفیت این برگه
+                          </span>
                         </div>
+                      )}
 
-                        {/* Header Left Demographic Summary (National ID removed from here so it only appears once in the Patient Demographics Box below) */}
-                        <div
-                          dir="rtl"
-                          className="text-left space-y-0.5 shrink-0"
-                          style={{ fontFamily: resolvedHeaderFontCss }}
+                      {/* Discrete A4 Paper Sheet (210mm x 297mm) with Footer Pinned to Bottom (mt-auto) */}
+                      <div
+                        ref={(el) => {
+                          if (reportIdx === 0) pageRefs.current[pageIdx] = el;
+                        }}
+                        className={`printable-report a4-sheet-page bg-white text-slate-950 w-full max-w-[210mm] min-h-[297mm] p-6 sm:p-10 md:p-11 shadow-2xl rounded-2xl relative overflow-hidden box-border break-words [word-break:break-word] shrink-0 flex flex-col justify-between ${
+                          monochromePrintMode ? 'grayscale contrast-125' : ''
+                        }`}
+                        style={
+                          {
+                            '--heading-font-family': resolvedHeadingFontCss,
+                            '--heading-font-size': `${headingFontSize}px`,
+                            fontFamily: resolvedBodyFontCss,
+                            fontSize: `${bodyFontSize || 14}px`,
+                            lineHeight: unifiedLineHeight,
+                            direction: 'rtl',
+                            color: '#050811',
+                            WebkitFontSmoothing: 'antialiased',
+                            textRendering: 'geometricPrecision',
+                            paddingTop: preprintedLetterheadMode ? `${preprintedTopMarginMm}mm` : undefined,
+                          } as React.CSSProperties
+                        }
+                      >
+                        {/* Ultra-Faint Centered Clinic Logo Watermark in the Background of the Printed Report */}
+                        {!preprintedLetterheadMode && entry.effectiveLogoUrl && (
+                          <div
+                            aria-hidden="true"
+                            className="a4-watermark-logo pointer-events-none select-none absolute inset-0 flex items-center justify-center z-0 overflow-hidden"
+                            style={{
+                              position: 'absolute',
+                              inset: 0,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              pointerEvents: 'none',
+                              zIndex: 0,
+                              overflow: 'hidden',
+                            }}
+                          >
+                            <img
+                              src={entry.effectiveLogoUrl}
+                              alt=""
+                              className="w-[92mm] h-[92mm] object-contain"
+                              style={{
+                                width: '92mm',
+                                height: '92mm',
+                                objectFit: 'contain',
+                                opacity: 0.065,
+                              }}
+                            />
+                          </div>
+                        )}
+
+                        {/* TOP SECTION: Official Clinic Letterhead + Patient Demographics Box */}
+                        <header
+                          className="printable-header-section relative z-10 shrink-0"
+                          style={
+                            {
+                              '--header-font-family': resolvedHeaderFontCss,
+                              fontFamily: resolvedHeaderFontCss,
+                            } as React.CSSProperties
+                          }
                         >
-                          <div dir="rtl" className="text-[11px] font-extrabold text-slate-950">
-                            <span>شماره پذیرش: </span>
-                            <span dir="ltr" className="inline-block">
-                              {patientInfo.admissionNumber || 'ADM-001'}
-                            </span>
-                          </div>
-                          <div dir="rtl" className="text-[10.5px] font-bold text-slate-800">
-                            <span>تاریخ: </span>
-                            <span dir="ltr" className="inline-block">
-                              {patientInfo.reportDate || '۱۴۰۴/۰۸/۲۱'}
-                            </span>
-                          </div>
-                          {paginationResult.totalPages > 1 && (
+                          {!preprintedLetterheadMode ? (
                             <div
-                              dir="rtl"
-                              className="text-[10px] font-extrabold pt-0.5"
-                              style={{ color: monochromePrintMode ? '#000000' : activeModalityColor }}
+                              className="pb-3 border-b-2 flex items-center justify-between gap-4"
+                              style={{
+                                borderColor: monochromePrintMode ? '#000000' : entry.activeModalityColor,
+                              }}
                             >
-                              برگه {sheet.pageNumber} از {paginationResult.totalPages}
+                              <div className="flex items-center gap-3.5">
+                                <img
+                                  src={entry.effectiveLogoUrl}
+                                  alt="لوگوی مرکز"
+                                  className="w-14 h-14 sm:w-16 sm:h-16 object-contain shrink-0 rounded-lg"
+                                />
+                                <div className="space-y-1">
+                                  <h1
+                                    className="font-black text-slate-950 leading-snug"
+                                    style={{
+                                      fontFamily: resolvedHeaderFontCss,
+                                      fontSize: `${headerFontSize}px`,
+                                    }}
+                                  >
+                                    {clinicNameDisplay}
+                                  </h1>
+                                  <p
+                                    className="font-extrabold"
+                                    style={{
+                                      fontFamily: resolvedHeaderFontCss,
+                                      fontSize: `${Math.max(11, Math.round(headerFontSize * 0.67))}px`,
+                                      color: monochromePrintMode ? '#000000' : entry.activeModalityColor,
+                                    }}
+                                  >
+                                    {clinicSubtitleDisplay}
+                                  </p>
+                                  <p
+                                    className="text-slate-800 font-semibold"
+                                    style={{
+                                      fontFamily: resolvedHeaderFontCss,
+                                      fontSize: `${Math.max(10, Math.round(headerFontSize * 0.58))}px`,
+                                    }}
+                                  >
+                                    {clinicAddressDisplay} • تلفن: {clinicPhoneDisplay}
+                                  </p>
+                                </div>
+                              </div>
+
+                              {/* Header Left Demographic Summary */}
+                              <div
+                                dir="rtl"
+                                className="text-left space-y-0.5 shrink-0"
+                                style={{ fontFamily: resolvedHeaderFontCss }}
+                              >
+                                <div dir="rtl" className="text-[11px] font-extrabold text-slate-950">
+                                  <span>شماره پذیرش: </span>
+                                  <span dir="ltr" className="inline-block">
+                                    {entry.patientInfo.admissionNumber || 'ADM-001'}
+                                  </span>
+                                </div>
+                                <div dir="rtl" className="text-[10.5px] font-bold text-slate-800">
+                                  <span>تاریخ: </span>
+                                  <span dir="ltr" className="inline-block">
+                                    {entry.patientInfo.reportDate || '۱۴۰۴/۰۸/۲۱'}
+                                  </span>
+                                </div>
+                                {entry.pagination.totalPages > 1 && (
+                                  <div
+                                    dir="rtl"
+                                    className="text-[10px] font-extrabold pt-0.5"
+                                    style={{
+                                      color: monochromePrintMode ? '#000000' : entry.activeModalityColor,
+                                    }}
+                                  >
+                                    برگه {sheet.pageNumber} از {entry.pagination.totalPages}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="no-print mb-2 px-3 py-1.5 rounded-lg border border-dashed border-amber-400 bg-amber-50 text-amber-900 text-[11px] font-bold flex items-center justify-between">
+                              <span>
+                                📄 فضای خالی سربرگ فیزیکی بیمارستان ({preprintedTopMarginMm} میلی‌متر از بالا)
+                              </span>
+                              <span>
+                                پذیرش: {entry.patientInfo.admissionNumber} | تاریخ: {entry.patientInfo.reportDate}
+                              </span>
                             </div>
                           )}
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="no-print mb-2 px-3 py-1.5 rounded-lg border border-dashed border-amber-400 bg-amber-50 text-amber-900 text-[11px] font-bold flex items-center justify-between">
-                        <span>
-                          📄 فضای خالی سربرگ فیزیکی بیمارستان ({preprintedTopMarginMm} میلی‌متر از بالا)
-                        </span>
-                        <span>
-                          پذیرش: {patientInfo.admissionNumber} | تاریخ: {patientInfo.reportDate}
-                        </span>
-                      </div>
-                    )}
 
-                    {/* Patient Demographics Box */}
-                    <div
-                      className={`my-3 p-3 rounded-xl border ${
-                        monochromePrintMode
-                          ? 'bg-white border-black text-black'
-                          : 'bg-slate-50/90 border-slate-400'
-                      }`}
-                      style={{
-                        fontFamily: resolvedHeaderFontCss,
-                        fontSize: `${Math.max(11, Math.round(headerFontSize * 0.67))}px`,
-                      }}
-                    >
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-y-1.5 gap-x-4">
-                        <div>
-                          <span className="text-slate-800 font-bold">نام بیمار: </span>
-                          <strong className="text-slate-950 font-black">{patientInfo.fullName || '---'}</strong>
-                        </div>
-                        <div>
-                          <span className="text-slate-800 font-bold">کد ملی / شناسه: </span>
-                          <strong className="text-slate-950 font-black" dir="ltr">
-                            {patientInfo.nationalId || '---'}
-                          </strong>
-                        </div>
-                        <div>
-                          <span className="text-slate-800 font-bold">سن و جنس: </span>
-                          <strong className="text-slate-950 font-black">
-                            {patientInfo.age ? `${patientInfo.age} سال` : '---'} /{' '}
-                            {patientInfo.gender === 'female'
-                              ? 'زن'
-                              : patientInfo.gender === 'male'
-                              ? 'مرد'
-                              : 'نامشخص'}
-                          </strong>
-                        </div>
-                        <div>
-                          <span className="text-slate-800 font-bold">پزشک معالج: </span>
-                          <strong className="text-slate-950 font-black">
-                            {patientInfo.referringPhysician || 'همکار گرامی'}
-                          </strong>
-                        </div>
-                      </div>
-                    </div>
-                  </header>
+                          {/* Patient Demographics Box */}
+                          <div
+                            className={`my-3 p-3 rounded-xl border ${
+                              monochromePrintMode
+                                ? 'bg-white border-black text-black'
+                                : 'bg-slate-50/90 border-slate-400'
+                            }`}
+                            style={{
+                              fontFamily: resolvedHeaderFontCss,
+                              fontSize: `${Math.max(11, Math.round(headerFontSize * 0.67))}px`,
+                            }}
+                          >
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-y-1.5 gap-x-4">
+                              <div>
+                                <span className="text-slate-800 font-bold">نام بیمار: </span>
+                                <strong className="text-slate-950 font-black">
+                                  {entry.patientInfo.fullName || '---'}
+                                </strong>
+                              </div>
+                              <div>
+                                <span className="text-slate-800 font-bold">کد ملی / شناسه: </span>
+                                <strong className="text-slate-950 font-black" dir="ltr">
+                                  {entry.patientInfo.nationalId || '---'}
+                                </strong>
+                              </div>
+                              <div>
+                                <span className="text-slate-800 font-bold">سن و جنس: </span>
+                                <strong className="text-slate-950 font-black">
+                                  {entry.patientInfo.age ? `${entry.patientInfo.age} سال` : '---'} /{' '}
+                                  {entry.patientInfo.gender === 'female'
+                                    ? 'زن'
+                                    : entry.patientInfo.gender === 'male'
+                                    ? 'مرد'
+                                    : 'نامشخص'}
+                                </strong>
+                              </div>
+                              <div>
+                                <span className="text-slate-800 font-bold">پزشک معالج: </span>
+                                <strong className="text-slate-950 font-black">
+                                  {entry.patientInfo.referringPhysician || 'همکار گرامی'}
+                                </strong>
+                              </div>
+                            </div>
+                          </div>
+                        </header>
 
                   {/* MIDDLE SECTION (flex-1): Studies & Findings for this A4 Sheet */}
                   <div className="relative z-10 flex-1 py-2 space-y-5">
@@ -1526,12 +2167,12 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                     <div
                       className="a4-pinned-footer relative z-10 mt-auto pt-3.5 border-t-2 shrink-0 flex items-end justify-between break-inside-avoid w-full"
                       style={{
-                        borderColor: monochromePrintMode ? '#000000' : `${activeModalityColor}77`,
+                        borderColor: monochromePrintMode ? '#000000' : `${entry.activeModalityColor}77`,
                       }}
                     >
                       {/* Verification QR Code */}
                       <div className="flex items-center gap-3">
-                        {qrDataUrl ? (
+                        {entryQrDataUrl ? (
                           <button
                             type="button"
                             onClick={() => setIsQrInspectOpen(true)}
@@ -1539,7 +2180,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                             className="group relative rounded-lg border-2 border-slate-900 p-1 bg-white shadow-xs shrink-0 cursor-pointer focus:outline-none"
                           >
                             <img
-                              src={qrDataUrl}
+                              src={entryQrDataUrl}
                               alt="QR اصالت‌سنجی"
                               className="w-16 h-16 sm:w-20 sm:h-20 block"
                               style={{ imageRendering: 'pixelated' }}
@@ -1556,7 +2197,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                         <div className="text-[10px] text-slate-800 space-y-0.5">
                           <div className="flex items-center gap-1 font-mono font-extrabold text-slate-950">
                             <span>
-                              کد اصالت‌سنجی: {patientInfo.nationalId || patientInfo.admissionNumber || '88412'}-PAC
+                              کد اصالت‌سنجی: {entry.patientInfo.nationalId || entry.patientInfo.admissionNumber || '88412'}-PAC
                             </span>
                           </div>
                           <p className="text-[9.5px] font-semibold text-slate-800">
@@ -1566,51 +2207,51 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                           </p>
                           <p
                             className="text-[9.5px] font-extrabold"
-                            style={{ color: monochromePrintMode ? '#000000' : activeModalityColor }}
+                            style={{ color: monochromePrintMode ? '#000000' : entry.activeModalityColor }}
                           >
                             {clinicNameDisplay}
                           </p>
                         </div>
                       </div>
 
-                      {/* Radiologist Stamp & Independent Signature per Doctor (Respects doctor.stampFont, doctor.stampFontSize & multi-line specialty) */}
+                      {/* Radiologist Stamp & Independent Signature per Doctor */}
                       <div
                         className="doctor-stamp-box text-center px-4 py-2.5 rounded-xl border-2 border-dashed min-w-[195px] max-w-[235px] w-fit bg-slate-50/60"
                         style={
                           {
-                            borderColor: monochromePrintMode ? '#000000' : activeModalityColor,
-                            '--stamp-font-family': resolvedDoctorStampFontCss,
-                            fontFamily: resolvedDoctorStampFontCss,
+                            borderColor: monochromePrintMode ? '#000000' : entry.activeModalityColor,
+                            '--stamp-font-family': entry.resolvedDoctorStampFontCss,
+                            fontFamily: entry.resolvedDoctorStampFontCss,
                           } as React.CSSProperties
                         }
                       >
                         <div
                           className="font-bold leading-snug break-words"
                           style={{
-                            color: monochromePrintMode ? '#000000' : activeModalityColor,
-                            fontFamily: resolvedDoctorStampFontCss,
-                            fontSize: `${resolvedDoctorStampFontSize}px`,
+                            color: monochromePrintMode ? '#000000' : entry.activeModalityColor,
+                            fontFamily: entry.resolvedDoctorStampFontCss,
+                            fontSize: `${entry.resolvedDoctorStampFontSize}px`,
                           }}
                         >
-                          {doctor.name}
+                          {entry.doctor.name}
                         </div>
                         <div
                           className="font-semibold text-slate-900 mt-0.5 whitespace-pre-line leading-snug break-words"
                           style={{
-                            fontFamily: resolvedDoctorStampFontCss,
-                            fontSize: `${Math.max(10, resolvedDoctorStampFontSize - 2)}px`,
+                            fontFamily: entry.resolvedDoctorStampFontCss,
+                            fontSize: `${Math.max(10, entry.resolvedDoctorStampFontSize - 2)}px`,
                           }}
                         >
-                          {doctor.specialty}
+                          {entry.doctor.specialty}
                         </div>
                         <div className="text-[10px] font-mono font-bold text-slate-800 mt-0.5">
-                          شماره نظام پزشکی: {doctor.medicalCouncilId}
+                          شماره نظام پزشکی: {entry.doctor.medicalCouncilId}
                         </div>
-                        {effectiveSignatureUrl && (
+                        {entry.effectiveSignatureUrl && (
                           <div className="mt-1.5 flex items-center justify-center">
                             <img
-                              src={effectiveSignatureUrl}
-                              alt={`امضای دیجیتال ${doctor.name}`}
+                              src={entry.effectiveSignatureUrl}
+                              alt={`امضای دیجیتال ${entry.doctor.name}`}
                               className="h-11 max-w-[170px] object-contain mx-auto"
                             />
                           </div>
@@ -1618,9 +2259,12 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                       </div>
                     </div>
                   )}
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 

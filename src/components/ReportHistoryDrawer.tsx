@@ -17,6 +17,9 @@ import {
   SlidersHorizontal,
   ChevronRight,
   ChevronLeft,
+  Printer,
+  CheckSquare,
+  Square,
 } from 'lucide-react';
 
 interface ReportHistoryDrawerProps {
@@ -29,6 +32,7 @@ interface ReportHistoryDrawerProps {
   onLoadReport: (report: MedicalReport) => void;
   onRestoreRevision?: (report: MedicalReport, revision: ReportRevision) => void;
   onDeleteReport: (id: string) => void;
+  onBatchPrintReports?: (selectedReports: MedicalReport[]) => void;
 }
 
 const PERSIAN_MONTHS = [
@@ -337,6 +341,7 @@ export const ReportHistoryDrawer: React.FC<ReportHistoryDrawerProps> = ({
   onLoadReport,
   onRestoreRevision,
   onDeleteReport,
+  onBatchPrintReports,
 }) => {
   const [search, setSearch] = useState('');
   const [selectedDate, setSelectedDate] = useState<string>('');
@@ -354,6 +359,22 @@ export const ReportHistoryDrawer: React.FC<ReportHistoryDrawerProps> = ({
   const [filterStatus, setFilterStatus] = useState<'all' | 'printed' | 'finalized'>('all');
 
   const [inspectingHistoryReport, setInspectingHistoryReport] = useState<MedicalReport | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!isOpen) {
+      setSelectedIds(new Set());
+    }
+  }, [isOpen]);
+
+  const toggleSelectReport = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const todayFormatted = useMemo(() => getTodayJalaliParts().formatted, []);
 
@@ -926,7 +947,46 @@ export const ReportHistoryDrawer: React.FC<ReportHistoryDrawerProps> = ({
             </span>
           </div>
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {onBatchPrintReports && filtered.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  const allFilteredSelected = filtered.every((r) => selectedIds.has(r.id));
+                  if (allFilteredSelected) {
+                    setSelectedIds((prev) => {
+                      const next = new Set(prev);
+                      filtered.forEach((r) => next.delete(r.id));
+                      return next;
+                    });
+                  } else {
+                    setSelectedIds((prev) => {
+                      const next = new Set(prev);
+                      filtered.forEach((r) => next.add(r.id));
+                      return next;
+                    });
+                  }
+                }}
+                className={`flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-lg border transition-colors cursor-pointer ${
+                  filtered.length > 0 && filtered.every((r) => selectedIds.has(r.id))
+                    ? 'bg-teal-600 text-white border-teal-700'
+                    : 'bg-white text-slate-700 hover:text-teal-800 border-slate-300 hover:border-teal-400'
+                }`}
+                title="انتخاب همه گزارش‌های نمایش‌داده‌شده برای چاپ یا خروجی دسته‌ای"
+              >
+                {filtered.length > 0 && filtered.every((r) => selectedIds.has(r.id)) ? (
+                  <CheckSquare className="w-3.5 h-3.5" />
+                ) : (
+                  <Square className="w-3.5 h-3.5" />
+                )}
+                <span>
+                  {filtered.length > 0 && filtered.every((r) => selectedIds.has(r.id))
+                    ? 'لغو انتخاب همه'
+                    : `انتخاب همه (${filtered.length})`}
+                </span>
+              </button>
+            )}
+
             {onOpenTypistAnalytics && (
               <button
                 type="button"
@@ -958,6 +1018,42 @@ export const ReportHistoryDrawer: React.FC<ReportHistoryDrawerProps> = ({
             </span>
           </div>
         </div>
+
+        {/* Sticky Batch Print / PDF / PNG Queue Bar */}
+        {onBatchPrintReports && selectedIds.size > 0 && (
+          <div className="px-4 py-2.5 bg-slate-900 text-white border-b border-slate-800 flex items-center justify-between flex-wrap gap-2 shrink-0 animate-fadeIn">
+            <div className="flex items-center gap-2 text-xs font-bold">
+              <span className="px-2.5 py-0.5 rounded-full bg-teal-500 text-slate-950 font-black">
+                {selectedIds.size} گزارش انتخاب شد
+              </span>
+              <span className="text-slate-300 hidden sm:inline">
+                آماده ارسال یکجا به چاپگر یا دانلود همزمان چند PDF و PNG
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setSelectedIds(new Set())}
+                className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold border border-slate-700 cursor-pointer"
+              >
+                پاک کردن انتخاب
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const orderedSelected = reports.filter((r) => selectedIds.has(r.id));
+                  if (orderedSelected.length > 0) {
+                    onBatchPrintReports(orderedSelected);
+                  }
+                }}
+                className="px-3.5 py-1.5 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 text-xs font-black flex items-center gap-1.5 shadow-sm transition-transform active:scale-95 cursor-pointer"
+              >
+                <Printer className="w-4 h-4" />
+                <span>صف چاپ / PDF / PNG دسته‌ای ({selectedIds.size} گزارش)</span>
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Reports List */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-50/50">
@@ -991,14 +1087,37 @@ export const ReportHistoryDrawer: React.FC<ReportHistoryDrawerProps> = ({
               const matchedDoctor = doctors.find((d) => d.id === rep.doctorId);
 
               const isToday = isTodayReport(rep);
+              const isSelected = selectedIds.has(rep.id);
 
               return (
                 <div
                   key={rep.id}
-                  className="bg-white rounded-2xl border border-slate-200 hover:border-teal-400 p-4 space-y-2 hover:shadow-md transition-all group"
+                  className={`rounded-2xl border p-4 space-y-2 hover:shadow-md transition-all group ${
+                    isSelected
+                      ? 'bg-teal-50/40 border-teal-500 ring-2 ring-teal-500/20'
+                      : 'bg-white border-slate-200 hover:border-teal-400'
+                  }`}
                 >
-                  <div className="flex items-start justify-between">
-                    <div>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-start gap-2.5 min-w-0">
+                      {onBatchPrintReports && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleSelectReport(rep.id);
+                          }}
+                          title={isSelected ? 'حذف از صف چاپ دسته‌ای' : 'افزودن به صف چاپ دسته‌ای'}
+                          className={`mt-0.5 w-5 h-5 rounded-md border flex items-center justify-center shrink-0 transition-colors cursor-pointer ${
+                            isSelected
+                              ? 'bg-teal-600 border-teal-600 text-white'
+                              : 'bg-white border-slate-300 hover:border-teal-500 text-transparent'
+                          }`}
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <h4 className="text-sm font-bold text-slate-900">
                           {rep.patientInfo?.fullName || 'بیمار بدون نام'}
@@ -1055,12 +1174,21 @@ export const ReportHistoryDrawer: React.FC<ReportHistoryDrawerProps> = ({
                       <div className="text-xs text-slate-700 font-semibold mt-1.5 line-clamp-1 group-hover:text-teal-900 transition-colors">
                         {displayTitle}
                       </div>
+                      </div>
                     </div>
 
                     <button
                       type="button"
-                      onClick={() => onDeleteReport(rep.id)}
-                      className="p-1.5 text-slate-300 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
+                      onClick={() => {
+                        setSelectedIds((prev) => {
+                          if (!prev.has(rep.id)) return prev;
+                          const next = new Set(prev);
+                          next.delete(rep.id);
+                          return next;
+                        });
+                        onDeleteReport(rep.id);
+                      }}
+                      className="p-1.5 text-slate-300 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer shrink-0"
                       title="حذف از آرشیو"
                     >
                       <Trash2 className="w-4 h-4" />

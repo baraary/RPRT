@@ -207,6 +207,7 @@ export default function App() {
   const [isTypistAnalyticsOpen, setIsTypistAnalyticsOpen] = useState(false);
   const [typistModalInitialTab, setTypistModalInitialTab] = useState<'analytics' | 'manage'>('analytics');
   const [isPrintOpen, setIsPrintOpen] = useState(false);
+  const [batchPrintReports, setBatchPrintReports] = useState<MedicalReport[]>([]);
   const [isReportsOpen, setIsReportsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isFontManagerOpen, setIsFontManagerOpen] = useState(false);
@@ -3041,6 +3042,7 @@ export default function App() {
         onClose={() => {
           setIsPrintOpen(false);
           setPrintAutoAction(null);
+          setBatchPrintReports([]);
         }}
         patientInfo={patientInfo}
         studies={studies}
@@ -3054,6 +3056,27 @@ export default function App() {
         }}
         initialAutoAction={printAutoAction}
         onAutoActionComplete={() => setPrintAutoAction(null)}
+        savedReports={savedReports}
+        doctors={doctors}
+        initialBatchReports={batchPrintReports}
+        onRecordBatchPrintedReports={(reportIds) => {
+          const idSet = new Set(reportIds);
+          let changed = false;
+          savedReports.forEach((rep) => {
+            if (idSet.has(rep.id) && (rep.status !== 'printed' || !rep.isLocked)) {
+              StorageService.saveReport({
+                ...rep,
+                status: 'printed',
+                isLocked: true,
+                revisionNote: 'چاپ / خروجی دسته‌ای',
+              });
+              changed = true;
+            }
+          });
+          if (changed) {
+            setSavedReports(StorageService.getSavedReports());
+          }
+        }}
       />
 
       <ReportHistoryDrawer
@@ -3068,6 +3091,12 @@ export default function App() {
         onDeleteReport={(id) => {
           const updated = StorageService.deleteReport(id);
           setSavedReports(updated);
+        }}
+        onBatchPrintReports={(selectedReports) => {
+          setBatchPrintReports(selectedReports);
+          setPrintAutoAction(null);
+          setIsReportsOpen(false);
+          setIsPrintOpen(true);
         }}
       />
 
