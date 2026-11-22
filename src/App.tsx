@@ -302,28 +302,64 @@ export default function App() {
       });
     }
     if (settings.autoFolderBackupEnabled) {
-      IndexedDbService.writeBackupToSelectedFolder();
+      IndexedDbService.syncWithSharedFolder({ requestPermission: false }).then((res) => {
+        if (res.ok && res.changed) {
+          setSavedReports(StorageService.getSavedReports());
+          setTemplates(StorageService.getTemplates());
+          setDoctors(StorageService.getDoctors());
+          setTypists(StorageService.getTypists());
+          setShortcuts(StorageService.getShortcuts());
+          const latestSettings = StorageService.getSettings();
+          setSettings((prev) =>
+            JSON.stringify(prev) === JSON.stringify(latestSettings) ? prev : latestSettings
+          );
+        }
+      });
     }
   }, [savedReports.length, templates.length, doctors.length, shortcuts.length, settings.lanSyncEnabled, settings.autoFolderBackupEnabled]);
 
-  // Automated nightly / end-of-shift & page-close local folder backup (File System Access API)
+  // Live Multi-PC Windows Shared Folder Sync (20s polling + window focus + shift backup, 100% offline, zero server)
   useEffect(() => {
     if (!settings.autoFolderBackupEnabled) return;
 
+    const runSharedFolderSync = () => {
+      IndexedDbService.syncWithSharedFolder({ requestPermission: false }).then((res) => {
+        if (res.ok && res.changed) {
+          setSavedReports(StorageService.getSavedReports());
+          setTemplates(StorageService.getTemplates());
+          setDoctors(StorageService.getDoctors());
+          setTypists(StorageService.getTypists());
+          setShortcuts(StorageService.getShortcuts());
+          const latestSettings = StorageService.getSettings();
+          setSettings((prev) =>
+            JSON.stringify(prev) === JSON.stringify(latestSettings) ? prev : latestSettings
+          );
+        }
+      });
+    };
+
     const handleVisibilityOrUnload = () => {
       if (document.visibilityState === 'hidden') {
+        IndexedDbService.syncWithSharedFolder({ requestPermission: false });
         IndexedDbService.writeBackupToSelectedFolder();
+      } else if (document.visibilityState === 'visible') {
+        runSharedFolderSync();
       }
     };
+
+    const syncPollTimer = window.setInterval(runSharedFolderSync, 20 * 1000);
     const dailyTimer = window.setInterval(() => {
       IndexedDbService.writeBackupToSelectedFolder();
-    }, 15 * 60 * 1000); // Check/update daily backup file every 15 minutes during shift
+    }, 15 * 60 * 1000);
 
     document.addEventListener('visibilitychange', handleVisibilityOrUnload);
+    window.addEventListener('focus', runSharedFolderSync);
     window.addEventListener('pagehide', handleVisibilityOrUnload);
     return () => {
+      window.clearInterval(syncPollTimer);
       window.clearInterval(dailyTimer);
       document.removeEventListener('visibilitychange', handleVisibilityOrUnload);
+      window.removeEventListener('focus', runSharedFolderSync);
       window.removeEventListener('pagehide', handleVisibilityOrUnload);
     };
   }, [settings.autoFolderBackupEnabled]);

@@ -481,15 +481,36 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     const res = await IndexedDbService.selectLocalBackupFolder();
     if (res.supported && res.folderName) {
       setAutoFolderBackupEnabled(true);
+      onSaveSettings({ ...settings, autoFolderBackupEnabled: true });
       setSavedFolderName(res.folderName);
       setLastAutoBackupTime(IndexedDbService.getLastAutoBackupTime());
       setFolderBackupStatus(
-        `✓ پوشه «${res.folderName}» روی هارد سیستم انتخاب شد و فایل پشتیبان امروز (${res.savedFileName || 'JSON'}) به صورت خودکار ذخیره گردید.`
+        `✓ پوشه اشتراکی «${res.folderName}» متصل شد و همگام‌سازی انجام گرفت (${res.peerCount || 1} سیستم در پوشه • ${res.mergedReportsCount ?? 0} گزارش و ${res.mergedTemplatesCount ?? 0} قالب مشترک).`
       );
+      onRefreshAllData();
     } else {
       handleExportBackup();
       setFolderBackupStatus(
         res.error || 'فایل پشتیبان روزانه مستقیماً در پوشه Downloads ذخیره شد.'
+      );
+    }
+  };
+
+  const handleManualSharedFolderSync = async () => {
+    setFolderBackupStatus('در حال خواندن و ادغام اطلاعات سایر سیستم‌ها از پوشه اشتراکی...');
+    const res = await IndexedDbService.syncWithSharedFolder({ requestPermission: true });
+    if (res.ok) {
+      await IndexedDbService.writeBackupToSelectedFolder();
+      setAutoFolderBackupEnabled(true);
+      setLastAutoBackupTime(IndexedDbService.getLastAutoBackupTime());
+      if (res.folderName) setSavedFolderName(res.folderName);
+      setFolderBackupStatus(
+        `✓ همگام‌سازی دوطرفه با پوشه «${res.folderName || savedFolderName}» انجام شد (${res.peerCount} سیستم متصل • ${res.mergedReportsCount} گزارش و ${res.mergedTemplatesCount} قالب مشترک).`
+      );
+      onRefreshAllData();
+    } else {
+      setFolderBackupStatus(
+        res.error || 'برای همگام‌سازی ابتدا پوشه اشتراکی شبکه را انتخاب کنید.'
       );
     }
   };
@@ -1577,7 +1598,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         راهنمای یک‌باره فعال‌سازی OAuth گیت‌هاب (سمت سرور):
                       </div>
                       <p className="text-slate-600 leading-relaxed">
-                        در تنظیمات گیت‌هاب (<span dir="ltr" className="font-mono">Developer Settings → OAuth Apps</span>) یک اپلیکیشن بسازید، آدرس زیر را به عنوان <span dir="ltr" className="font-mono">Authorization callback URL</span> قرار دهید و مقادیر <span dir="ltr" className="font-mono font-bold">GITHUB_CLIENT_ID</span> و <span dir="ltr" className="font-mono font-bold">GITHUB_CLIENT_SECRET</span> را در بخش Secrets سرور تنظیم کنید:
+                        در تنظیمات گیت‌هاب (<span dir="ltr" className="font-mono">Developer Settings → OAuth Apps</span>) یک اپلیکیشن بسازید، آدرس زیر را در بخش <span dir="ltr" className="font-mono">Redirect URIs</span> قرار دهید و مقادیر <span dir="ltr" className="font-mono font-bold">GITHUB_CLIENT_ID</span> و <span dir="ltr" className="font-mono font-bold">GITHUB_CLIENT_SECRET</span> را در بخش Secrets سرور تنظیم کنید:
                       </p>
                       <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1">
                         <code className="text-[10.5px] font-mono text-slate-800 break-all flex-1" dir="ltr">
@@ -1616,46 +1637,62 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               )}
             </div>
 
-            {/* Automated Daily Local Folder Backup (File System Access API) */}
-            <div className="p-3.5 bg-amber-50/60 border border-amber-200 rounded-2xl space-y-2.5">
+            {/* Multi-PC Windows Shared Folder Sync + Automatic Daily Backup (100% Offline, Zero Server) */}
+            <div className="p-3.5 bg-amber-50/70 border border-amber-300 rounded-2xl space-y-2.5">
               <div className="flex items-center justify-between gap-2 flex-wrap">
-                <div className="flex items-center gap-1.5 text-xs font-bold text-amber-950">
+                <div className="flex items-center gap-1.5 text-xs font-black text-amber-950">
                   <FolderSync className="w-4 h-4 text-amber-600" />
                   <span>
-                    پشتیبان‌گیری خودکار روزانه در پوشه کامپیوتر (File System Access API در کروم و اج)
+                    همگام‌سازی همزمان چند سیستم با پوشه اشتراکی شبکه ویندوز (بدون اینترنت و بدون سرور)
                   </span>
                 </div>
-                <div className="flex items-center gap-2">
-                  <label className="flex items-center gap-1 text-[11px] font-bold text-amber-900 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={autoFolderBackupEnabled}
-                      onChange={(e) => setAutoFolderBackupEnabled(e.target.checked)}
-                      className="w-4 h-4 rounded text-amber-600"
-                    />
-                    <span>بکاپ خودکار شبانه / هنگام بستن</span>
-                  </label>
+                <label className="flex items-center gap-1.5 text-[11px] font-bold text-amber-900 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autoFolderBackupEnabled}
+                    onChange={(e) => setAutoFolderBackupEnabled(e.target.checked)}
+                    className="w-4 h-4 rounded text-amber-600"
+                  />
+                  <span>همگام‌سازی خودکار زنده (هر ۲۰ ثانیه)</span>
+                </label>
+              </div>
+              <p className="text-[11px] text-amber-950/90 leading-relaxed">
+                مخصوص بیمارستان‌ها و مراکز بدون اینترنت و بدون دسترسی سرور: روی هر سیستم، همین دکمه زیر را بزنید و <strong>یک پوشه اشتراکی مشترک شبکه ویندوز</strong> (مثل <code className="font-mono" dir="ltr">Z:\RadioReport_Sync</code> یا <code className="font-mono" dir="ltr">\\Server\Share</code>) را انتخاب کنید. هر سیستم فایل اختصاصی خودش را می‌نویسد و هر ۲۰ ثانیه گزارش‌ها، قالب‌ها، پزشکان و میانبرهای تمام سیستم‌ها را بدون تداخل با هم ادغام می‌کند.
+              </p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={handleSelectBackupFolder}
+                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer flex items-center gap-1.5"
+                >
+                  <FolderSync className="w-3.5 h-3.5" />
+                  <span>
+                    {savedFolderName
+                      ? `تغییر پوشه اشتراکی (${savedFolderName})`
+                      : 'انتخاب پوشه اشتراکی شبکه / هارد'}
+                  </span>
+                </button>
+                {savedFolderName && (
                   <button
                     type="button"
-                    onClick={handleSelectBackupFolder}
-                    className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer"
+                    onClick={handleManualSharedFolderSync}
+                    className="px-3 py-1.5 bg-white hover:bg-amber-100 text-amber-950 border border-amber-300 text-xs font-bold rounded-xl transition-colors cursor-pointer flex items-center gap-1.5"
                   >
-                    {savedFolderName ? `تغییر پوشه (${savedFolderName})` : 'انتخاب پوشه روی هارد کامپیوتر'}
+                    <RefreshCw className="w-3.5 h-3.5 text-amber-700" />
+                    <span>همگام‌سازی فوری / تایید مجدد دسترسی پوشه</span>
                   </button>
-                </div>
+                )}
               </div>
-              <p className="text-[11px] text-amber-900/90 leading-relaxed">
-                با انتخاب یک پوشه روی هارد کامپیوتر، برنامه هر شب و همچنین هنگام ذخیره یا بستن برنامه، به صورت خودکار یک فایل بکاپ از تمام گزارش‌های آن روز (<code className="font-mono">RadioReport_AutoBackup_YYYY-MM-DD.json</code>) در هارد سیستم ذخیره می‌کند.
-              </p>
               {(savedFolderName || lastAutoBackupTime) && (
                 <div className="flex items-center justify-between flex-wrap gap-2 text-[11px] bg-white/90 px-3 py-1.5 rounded-xl border border-amber-200 text-slate-700">
                   <span>
-                    📁 پوشه متصل هارد:{' '}
+                    📁 پوشه اشتراکی متصل:{' '}
                     <strong className="text-amber-950">{savedFolderName || 'پوشه پیش‌فرض سیستم'}</strong>
                   </span>
                   {lastAutoBackupTime && (
                     <span>
-                      🕒 آخرین بکاپ خودکار: <strong className="font-mono text-teal-800">{lastAutoBackupTime}</strong>
+                      🕒 آخرین همگام‌سازی/بکاپ:{' '}
+                      <strong className="font-mono text-teal-800">{lastAutoBackupTime}</strong>
                     </span>
                   )}
                 </div>
