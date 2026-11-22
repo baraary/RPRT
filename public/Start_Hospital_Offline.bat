@@ -9,8 +9,7 @@ echo   Starting local browser host on http://localhost:%PORT%/
 echo   Keep this window open while using RadioReport.
 echo ============================================================
 
-start "" "http://localhost:%PORT%/"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0offline_server.ps1" -RootDir "%~dp0" -Port %PORT%
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0offline_server.ps1" -Port %PORT%
 
 if errorlevel 1 (
   echo.
