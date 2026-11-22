@@ -40,6 +40,13 @@ jobs:
       - name: Copy index.html to 404.html for SPA routing support
         run: cp dist/index.html dist/404.html
 
+      - name: Upload Ready-to-Use Offline Hospital ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: RadioReport-Offline-Hospital
+          path: ./dist
+          retention-days: 90
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
