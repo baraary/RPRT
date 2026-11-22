@@ -829,6 +829,7 @@ export const StorageService = {
     const current = this.getSettings();
     const updated = { ...current, ...settings };
     localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(updated));
+    localStorage.setItem('radioreport_settings_updated_at', new Date().toISOString());
     return updated;
   },
 

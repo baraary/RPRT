@@ -290,9 +290,18 @@ export const IndexedDbService = {
       return Array.from(map.values());
     };
 
-    const mergeSettings = (current: any, incoming: any): any => {
-      if (!incoming || typeof incoming !== 'object') return current;
-      if (!current || typeof current !== 'object') return incoming;
+    const mergeSettings = (
+      current: any,
+      currentUpdatedAt: number,
+      incoming: any,
+      incomingUpdatedAt: number
+    ): { settings: any; updatedAt: number } => {
+      if (!incoming || typeof incoming !== 'object') {
+        return { settings: current, updatedAt: currentUpdatedAt };
+      }
+      if (!current || typeof current !== 'object') {
+        return { settings: incoming, updatedAt: incomingUpdatedAt };
+      }
       const mergedDict = mergeById(
         Array.isArray(current.customDictionary) ? current.customDictionary : [],
         Array.isArray(incoming.customDictionary) ? incoming.customDictionary : []
@@ -301,10 +310,26 @@ export const IndexedDbService = {
         Array.isArray(current.customFonts) ? current.customFonts : [],
         Array.isArray(incoming.customFonts) ? incoming.customFonts : []
       );
+      const useIncomingBase = incomingUpdatedAt > currentUpdatedAt;
+      const base = useIncomingBase
+        ? {
+            ...current,
+            ...incoming,
+            autoFolderBackupEnabled: current.autoFolderBackupEnabled,
+            lanSyncEnabled: current.lanSyncEnabled,
+          }
+        : { ...current };
       return {
-        ...current,
-        customDictionary: mergedDict,
-        customFonts: mergedFonts.length > 0 ? mergedFonts : current.customFonts,
+        settings: {
+          ...base,
+          customDictionary: mergedDict,
+          customFonts: mergedFonts.length > 0 ? mergedFonts : base.customFonts,
+          modalityColors: {
+            ...(useIncomingBase ? current.modalityColors : incoming.modalityColors),
+            ...(useIncomingBase ? incoming.modalityColors : current.modalityColors),
+          },
+        },
+        updatedAt: Math.max(currentUpdatedAt, incomingUpdatedAt),
       };
     };
 
@@ -361,6 +386,8 @@ export const IndexedDbService = {
       const localShortcuts = StorageService.getShortcuts();
       const localReferring = StorageService.getReferringPhysicians();
       const localSettings = StorageService.getSettings();
+      const localSettingsTs =
+        new Date(localStorage.getItem('radioreport_settings_updated_at') || 0).getTime() || 0;
 
       const beforeSig = JSON.stringify({
         r: localReports.map((x: any) => `${x.id}:${x.updatedAt || x.createdAt || ''}`),
@@ -368,6 +395,7 @@ export const IndexedDbService = {
         d: localDoctors.map((x: any) => `${x.id}:${x.name || ''}`),
         y: localTypists.map((x: any) => `${x.id}:${x.name || ''}`),
         s: localShortcuts.map((x: any) => `${x.id}:${x.code || ''}`),
+        clinic: localSettings.clinicName || '',
         dictLen: localSettings.customDictionary?.length || 0,
       });
 
@@ -378,6 +406,7 @@ export const IndexedDbService = {
       let mergedShortcuts = [...localShortcuts];
       let mergedReferring = [...localReferring];
       let mergedSettings = { ...localSettings };
+      let mergedSettingsTs = localSettingsTs;
 
       const peerFiles: any[] = [];
       const fallbackBackupFiles: any[] = [];
@@ -416,7 +445,16 @@ export const IndexedDbService = {
             mergedReferring = mergeById(mergedReferring, parsed.referringPhysicians);
           }
           if (parsed.settings && typeof parsed.settings === 'object') {
-            mergedSettings = mergeSettings(mergedSettings, parsed.settings);
+            const incomingTs =
+              new Date(parsed.settingsUpdatedAt || parsed.syncedAt || 0).getTime() || 0;
+            const resSettings = mergeSettings(
+              mergedSettings,
+              mergedSettingsTs,
+              parsed.settings,
+              incomingTs
+            );
+            mergedSettings = resSettings.settings;
+            mergedSettingsTs = resSettings.updatedAt;
           }
         } catch {
           // Ignore partially written or unreadable peer file during concurrent save; next cycle picks it up
@@ -435,6 +473,7 @@ export const IndexedDbService = {
         d: mergedDoctors.map((x: any) => `${x.id}:${x.name || ''}`),
         y: mergedTypists.map((x: any) => `${x.id}:${x.name || ''}`),
         s: mergedShortcuts.map((x: any) => `${x.id}:${x.code || ''}`),
+        clinic: mergedSettings.clinicName || '',
         dictLen: mergedSettings.customDictionary?.length || 0,
       });
 
@@ -448,6 +487,12 @@ export const IndexedDbService = {
         StorageService.saveShortcuts(mergedShortcuts);
         StorageService.saveReferringPhysicians(mergedReferring);
         StorageService.saveSettings(mergedSettings);
+        if (mergedSettingsTs > 0) {
+          localStorage.setItem(
+            'radioreport_settings_updated_at',
+            new Date(mergedSettingsTs).toISOString()
+          );
+        }
         await Promise.all([
           this.setItem('reports', mergedReports),
           this.setItem('templates', mergedTemplates),
@@ -465,6 +510,7 @@ export const IndexedDbService = {
         version: '1.3',
         workstationId,
         syncedAt: nowIso,
+        settingsUpdatedAt: mergedSettingsTs > 0 ? new Date(mergedSettingsTs).toISOString() : undefined,
         reports: mergedReports,
         templates: mergedTemplates,
         doctors: mergedDoctors,
