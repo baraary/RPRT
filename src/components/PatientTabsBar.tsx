@@ -20,6 +20,7 @@ interface PatientTabsBarProps {
   activeTabId: string;
   onSelectTab: (tabId: string) => void;
   onAddNewTab: () => void;
+  onAddBlankTab?: () => void;
   onDuplicateActiveTab: () => void;
   onCloseTab: (tabId: string, e: React.MouseEvent) => void;
   onUpdateTabPatientName?: (tabId: string, newName: string) => void;
@@ -79,6 +80,7 @@ export const PatientTabsBar: React.FC<PatientTabsBarProps> = ({
   onUpdateTabPatientName,
   onOpenReports,
   onOpenCommandPalette,
+  onAddBlankTab,
   reportsCount = 0,
 }) => {
   const tabsScrollRef = useRef<HTMLDivElement | null>(null);
@@ -269,15 +271,28 @@ export const PatientTabsBar: React.FC<PatientTabsBarProps> = ({
               );
             })}
 
-            {/* Add New Patient Tab Button */}
+            {/* Add New Patient Tab Button (With Template Picker) */}
             <button
               type="button"
               onClick={onAddNewTab}
-              title="باز کردن تب بیمار جدید و انتخاب قالب‌های همین مدالیته (Alt+N)"
+              title="باز کردن تب بیمار جدید با انتخاب قالب آماده (Alt+N)"
               className={`w-7 h-7 flex items-center justify-center rounded-xl border transition-all duration-200 cursor-pointer shrink-0 active:scale-95 ${activeModBadge.plusBtnCls}`}
             >
               <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
             </button>
+
+            {/* 1-Click Blank Patient Tab Button (No Template Modal) */}
+            {onAddBlankTab && (
+              <button
+                type="button"
+                onClick={onAddBlankTab}
+                title="باز کردن فوری یک تب گزارش خالی جدید بدون قالب آماده"
+                className="h-7 px-2 flex items-center gap-1 rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white text-[10.5px] font-bold transition-all duration-200 cursor-pointer shrink-0 active:scale-95 whitespace-nowrap"
+              >
+                <FileEdit className="w-3 h-3 text-teal-400 shrink-0" />
+                <span>تب خالی</span>
+              </button>
+            )}
           </div>
 
           {/* Left Actions: Scroll Left + Multi-line Wrap + Spotlight Command (Ctrl+K) + Duplicate + Archive */}

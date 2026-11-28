@@ -12,6 +12,7 @@ import {
   ReportStudy,
   CustomFont,
   PatientWorkspaceTab,
+  HisWorklistPatient,
 } from './types';
 import { StorageService } from './services/storage';
 import { IndexedDbService } from './services/indexedDbStorage';
@@ -33,6 +34,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { FontManagerModal } from './components/FontManagerModal';
 import { CommandPaletteModal } from './components/CommandPaletteModal';
 import { ShiftLaunchpad } from './components/ShiftLaunchpad';
+import { HisWorklistModal } from './components/HisWorklistModal';
 import {
   PlusCircle,
   X,
@@ -93,6 +95,7 @@ export default function App() {
   const [templates, setTemplates] = useState<MedicalTemplate[]>(() => StorageService.getTemplates());
   const [shortcuts, setShortcuts] = useState<MedicalShortcut[]>(() => StorageService.getShortcuts());
   const [savedReports, setSavedReports] = useState<MedicalReport[]>(() => StorageService.getSavedReports());
+  const [hisWorklist, setHisWorklist] = useState<HisWorklistPatient[]>(() => StorageService.getHisWorklist());
   const [settings, setSettings] = useState<AppSettings>(() => StorageService.getSettings());
 
   // Multi-Patient Open Workspace Tabs (Option 5)
@@ -207,6 +210,7 @@ export default function App() {
   const [isTypistAnalyticsOpen, setIsTypistAnalyticsOpen] = useState(false);
   const [typistModalInitialTab, setTypistModalInitialTab] = useState<'analytics' | 'manage'>('analytics');
   const [isPrintOpen, setIsPrintOpen] = useState(false);
+  const [isHisWorklistOpen, setIsHisWorklistOpen] = useState(false);
   const [batchPrintReports, setBatchPrintReports] = useState<MedicalReport[]>([]);
   const [isReportsOpen, setIsReportsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -310,6 +314,7 @@ export default function App() {
           setDoctors(StorageService.getDoctors());
           setTypists(StorageService.getTypists());
           setShortcuts(StorageService.getShortcuts());
+          setHisWorklist(StorageService.getHisWorklist());
           const latestSettings = StorageService.getSettings();
           setSettings((prev) =>
             JSON.stringify(prev) === JSON.stringify(latestSettings) ? prev : latestSettings
@@ -317,7 +322,7 @@ export default function App() {
         }
       });
     }
-  }, [savedReports.length, templates.length, doctors.length, shortcuts.length, settings.lanSyncEnabled, settings.autoFolderBackupEnabled]);
+  }, [savedReports.length, templates.length, doctors.length, typists.length, shortcuts.length, hisWorklist.length, settings.lanSyncEnabled, settings.autoFolderBackupEnabled]);
 
   // Live Multi-PC Windows Shared Folder Sync (20s polling + window focus + shift backup, 100% offline, zero server)
   useEffect(() => {
@@ -331,6 +336,7 @@ export default function App() {
           setDoctors(StorageService.getDoctors());
           setTypists(StorageService.getTypists());
           setShortcuts(StorageService.getShortcuts());
+          setHisWorklist(StorageService.getHisWorklist());
           const latestSettings = StorageService.getSettings();
           setSettings((prev) =>
             JSON.stringify(prev) === JSON.stringify(latestSettings) ? prev : latestSettings
@@ -662,6 +668,45 @@ export default function App() {
     setNewTabPatientName('');
     setSelectedNewTabTemplates([]);
     setIsNewTabTemplatePickerOpen(true);
+  };
+
+  // Immediately open a clean blank patient report tab (1-click, no forced template modal)
+  const handleAddBlankPatientTab = () => {
+    const nextAdm = incrementAdmissionNumber(patientInfo.admissionNumber);
+    const targetDir = getDefaultModalityDirection(modality, settings.modalityDirections);
+    const blankStudy = createDefaultStudy(
+      Boolean(settings.numberSlotsEnabled),
+      modality,
+      targetDir
+    );
+    const newTab: PatientWorkspaceTab = {
+      id: `tab-${Date.now()}`,
+      patientInfo: {
+        fullName: '',
+        nationalId: '',
+        age: '',
+        gender: 'female',
+        admissionNumber: nextAdm,
+        reportDate: new Intl.DateTimeFormat('fa-IR-u-nu-latn').format(new Date()),
+        referringPhysician: '',
+      },
+      studies: [blankStudy],
+      modality,
+      doctorId: activeDoctorId,
+      typistId: activeTypistId,
+      status: 'draft',
+      updatedAt: new Date().toISOString(),
+    };
+
+    const nextTabs = [...workspaceTabs, newTab];
+    setWorkspaceTabs(nextTabs);
+    StorageService.saveOpenTabs(nextTabs);
+    setActiveTabId(newTab.id);
+    setPatientInfo(newTab.patientInfo);
+    setStudies(newTab.studies);
+    setActiveStudyIdInEditor(blankStudy.id);
+    setTargetStudyIdForTemplate(blankStudy.id);
+    showToast(`تب گزارش خالی جدید (${nextAdm}) باز شد.`);
   };
 
   // Update patient name directly from a tab pill in PatientTabsBar
@@ -1539,11 +1584,18 @@ export default function App() {
   const handleAddStudy = (mod: Modality = modality) => {
     const modTitle =
       mod === 'mri' ? 'ام‌آر‌آی' : mod === 'ct' ? 'سی‌تی‌اسکن' : 'سونوگرافی';
+    const targetDir = getDefaultModalityDirection(mod, settings.modalityDirections);
+    const newBlankStudy = createDefaultStudy(
+      Boolean(settings.numberSlotsEnabled),
+      mod,
+      targetDir
+    );
 
+    setStudies((prev) => [...prev, newBlankStudy]);
     setModality(mod);
-    setTemplateDrawerMode('add-new');
-    setIsTemplatesOpen(true);
-    showToast(`قالب آماده مورد نظر برای افزودن بررسی جدید (${modTitle}) را انتخاب نمایید.`);
+    setActiveStudyIdInEditor(newBlankStudy.id);
+    setTargetStudyIdForTemplate(newBlankStudy.id);
+    showToast(`یک گزارش خالی ${modTitle} اضافه شد — آماده پر کردن است.`);
   };
 
   const handleRemoveStudy = (studyId: string) => {
@@ -1924,16 +1976,24 @@ export default function App() {
     showToast('↺ بانک جملات اعضا و شورتکات‌ها به مقادیر استاندارد بازنشانی شد.');
   };
 
+  const triggerSharedSyncIfEnabled = () => {
+    if (settings.autoFolderBackupEnabled) {
+      IndexedDbService.syncWithSharedFolder({ requestPermission: false });
+    }
+  };
+
   // Doctor actions
   const handleAddDoctor = (doc: Omit<Doctor, 'id'>) => {
     StorageService.addDoctor(doc);
     setDoctors(StorageService.getDoctors());
+    triggerSharedSyncIfEnabled();
     showToast(`پزشک «${doc.name}» افزوده شد.`);
   };
 
   const handleUpdateDoctor = (id: string, updates: Partial<Doctor>) => {
     const updated = StorageService.updateDoctor(id, updates);
     setDoctors(updated);
+    triggerSharedSyncIfEnabled();
   };
 
   const handleDeleteDoctor = (id: string) => {
@@ -1942,6 +2002,7 @@ export default function App() {
     if (activeDoctorId === id && updated.length > 0) {
       setActiveDoctorId(updated[0].id);
     }
+    triggerSharedSyncIfEnabled();
     showToast('پزشک حذف شد.');
   };
 
@@ -1960,12 +2021,14 @@ export default function App() {
     setTypists(StorageService.getTypists());
     setActiveTypistId(created.id);
     StorageService.saveSettings({ activeTypistId: created.id });
+    triggerSharedSyncIfEnabled();
     showToast(`✓ تایپیست جدید «${created.name}» اضافه و فعال شد.`);
   };
 
   const handleUpdateTypist = (id: string, updates: Partial<Typist>) => {
     const updated = StorageService.updateTypist(id, updates);
     setTypists(updated);
+    triggerSharedSyncIfEnabled();
     showToast('✓ مشخصات تایپیست ویرایش و ذخیره شد.');
   };
 
@@ -1976,6 +2039,7 @@ export default function App() {
       setActiveTypistId(updated[0].id);
       StorageService.saveSettings({ activeTypistId: updated[0].id });
     }
+    triggerSharedSyncIfEnabled();
     showToast('تایپیست از لیست حذف شد.');
   };
 
@@ -2009,8 +2073,197 @@ export default function App() {
     setTemplates(StorageService.getTemplates());
     setShortcuts(StorageService.getShortcuts());
     setSavedReports(StorageService.getSavedReports());
+    setHisWorklist(StorageService.getHisWorklist());
     setSettings(StorageService.getSettings());
     showToast('اطلاعات سامانه بروزرسانی شد.');
+  };
+
+  // Count pending HIS patients not yet matched in savedReports
+  const hisPendingCount = hisWorklist.filter((patient) => {
+    const pAdm = (patient.admissionNumber || '').trim().toLowerCase();
+    const pNat = (patient.nationalId || '').trim().toLowerCase();
+    const pName = (patient.fullName || '').trim().replace(/\s+/g, ' ');
+    return !savedReports.some((r) => {
+      const rAdm = (r.patientInfo.admissionNumber || '').trim().toLowerCase();
+      const rNat = (r.patientInfo.nationalId || '').trim().toLowerCase();
+      const rName = (r.patientInfo.fullName || '').trim().replace(/\s+/g, ' ');
+      if (pAdm && rAdm && pAdm === rAdm) return true;
+      if (pNat && rNat && pNat === rNat) return true;
+      if (pName && rName && pName === rName) return true;
+      return false;
+    });
+  }).length;
+
+  // Auto-fill active workspace or open a new tab from HIS Excel/CSV worklist
+  const handleSelectHisPatient = (patient: HisWorklistPatient, openInNewTab: boolean) => {
+    const todayJalali = new Intl.DateTimeFormat('fa-IR-u-nu-latn').format(new Date());
+    const nextPatientInfo: PatientInfo = {
+      fullName: patient.fullName || '',
+      nationalId: patient.nationalId || '',
+      age: patient.age || '',
+      gender: patient.gender || 'female',
+      admissionNumber:
+        patient.admissionNumber ||
+        (openInNewTab
+          ? incrementAdmissionNumber(patientInfo.admissionNumber)
+          : patientInfo.admissionNumber || `ADM-${Math.floor(1000 + Math.random() * 9000)}`),
+      reportDate: patient.reportDate || todayJalali,
+      referringPhysician: patient.referringPhysician || '',
+    };
+
+    if (nextPatientInfo.referringPhysician.trim()) {
+      StorageService.addOrIncrementReferringPhysician(nextPatientInfo.referringPhysician.trim());
+    }
+
+    if (openInNewTab) {
+      const targetMod: Modality = patient.detectedModality || modality;
+      const targetDir = getDefaultModalityDirection(targetMod, settings.modalityDirections);
+      const initialStudy = createDefaultStudy(
+        Boolean(settings.numberSlotsEnabled),
+        targetMod,
+        targetDir
+      );
+      if (patient.serviceName) {
+        initialStudy.titleAndTechnique = patient.serviceName;
+      }
+
+      const newTab: PatientWorkspaceTab = {
+        id: `tab-${Date.now()}`,
+        patientInfo: nextPatientInfo,
+        studies: [initialStudy],
+        modality: targetMod,
+        doctorId: activeDoctorId,
+        typistId: activeTypistId,
+        status: 'draft',
+        updatedAt: new Date().toISOString(),
+      };
+      const nextTabs = [...workspaceTabs, newTab];
+      setWorkspaceTabs(nextTabs);
+      StorageService.saveOpenTabs(nextTabs);
+      setActiveTabId(newTab.id);
+      setPatientInfo(newTab.patientInfo);
+      setStudies(newTab.studies);
+      setModality(targetMod);
+      setActiveStudyIdInEditor(initialStudy.id);
+      setTargetStudyIdForTemplate(initialStudy.id);
+      showToast(
+        patient.serviceName
+          ? `تب جدید برای «${patient.fullName}» (${patient.serviceName}) باز شد.`
+          : `تب جدید برای «${patient.fullName}» آماده شد.`
+      );
+    } else {
+      setPatientInfo(nextPatientInfo);
+      if (patient.detectedModality && patient.detectedModality !== modality) {
+        const isFreshEditor =
+          studies.length === 1 &&
+          (!studies[0].titleAndTechnique || !studies[0].titleAndTechnique.trim()) &&
+          studies[0].findingsHtml.replace(/<[^>]+>/g, '').trim().length === 0;
+        if (isFreshEditor) {
+          const targetDir = getDefaultModalityDirection(
+            patient.detectedModality,
+            settings.modalityDirections
+          );
+          setModality(patient.detectedModality);
+          setStudies((prev) =>
+            prev.map((s, idx) =>
+              idx === 0
+                ? {
+                    ...s,
+                    modality: patient.detectedModality!,
+                    direction: targetDir,
+                    titleAndTechnique: patient.serviceName || s.titleAndTechnique,
+                  }
+                : s
+            )
+          );
+        }
+      } else if (patient.serviceName) {
+        setStudies((prev) =>
+          prev.map((s, idx) =>
+            idx === 0 && !s.titleAndTechnique.trim()
+              ? { ...s, titleAndTechnique: patient.serviceName || '' }
+              : s
+          )
+        );
+      }
+      showToast(
+        patient.serviceName
+          ? `مشخصات «${patient.fullName}» پر شد (${patient.serviceName}).`
+          : `مشخصات «${patient.fullName}» به صورت خودکار پر شد.`
+      );
+    }
+  };
+
+  // Batch-open multiple selected HIS patients into separate workspace tabs at once
+  const handleOpenMultipleHisPatients = (patients: HisWorklistPatient[]) => {
+    if (!patients || patients.length === 0) return;
+    const todayJalali = new Intl.DateTimeFormat('fa-IR-u-nu-latn').format(new Date());
+    const nowTs = Date.now();
+    let runningAdm = patientInfo.admissionNumber || `ADM-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    const createdTabs: PatientWorkspaceTab[] = patients.map((p, idx) => {
+      const adm = p.admissionNumber || (runningAdm = incrementAdmissionNumber(runningAdm));
+      const pInfo: PatientInfo = {
+        fullName: p.fullName || '',
+        nationalId: p.nationalId || '',
+        age: p.age || '',
+        gender: p.gender || 'female',
+        admissionNumber: adm,
+        reportDate: p.reportDate || todayJalali,
+        referringPhysician: p.referringPhysician || '',
+      };
+
+      if (pInfo.referringPhysician.trim()) {
+        StorageService.addOrIncrementReferringPhysician(pInfo.referringPhysician.trim());
+      }
+
+      const targetMod: Modality = p.detectedModality || modality;
+      const targetDir = getDefaultModalityDirection(targetMod, settings.modalityDirections);
+      const initialStudy = createDefaultStudy(
+        Boolean(settings.numberSlotsEnabled),
+        targetMod,
+        targetDir
+      );
+      // Give each study a guaranteed unique id when opening many tabs simultaneously
+      initialStudy.id = `study-${nowTs}-${idx}-${Math.floor(Math.random() * 1000)}`;
+      if (p.serviceName) {
+        initialStudy.titleAndTechnique = p.serviceName;
+      }
+
+      return {
+        id: `tab-${nowTs}-${idx}`,
+        patientInfo: pInfo,
+        studies: [initialStudy],
+        modality: targetMod,
+        doctorId: activeDoctorId,
+        typistId: activeTypistId,
+        status: 'draft',
+        updatedAt: new Date().toISOString(),
+      };
+    });
+
+    // If there is only 1 existing tab and it is completely untouched/blank, replace it cleanly
+    const isSingleUntouchedBlankTab =
+      workspaceTabs.length === 1 &&
+      !patientInfo.fullName.trim() &&
+      studies.length === 1 &&
+      !studies[0].titleAndTechnique.trim() &&
+      studies[0].findingsHtml.replace(/<[^>]+>/g, '').trim().length === 0;
+
+    const nextTabs = isSingleUntouchedBlankTab
+      ? createdTabs
+      : [...workspaceTabs, ...createdTabs];
+
+    const firstCreated = createdTabs[0];
+    setWorkspaceTabs(nextTabs);
+    StorageService.saveOpenTabs(nextTabs);
+    setActiveTabId(firstCreated.id);
+    setPatientInfo(firstCreated.patientInfo);
+    setStudies(firstCreated.studies);
+    setModality(firstCreated.modality);
+    setActiveStudyIdInEditor(firstCreated.studies[0].id);
+    setTargetStudyIdForTemplate(firstCreated.studies[0].id);
+    showToast(`${createdTabs.length} بیمار انتخاب‌شده همزمان در تب‌های جداگانه باز شدند.`);
   };
 
   const currentDoctor = doctors.find((d) => d.id === activeDoctorId) || doctors[0];
@@ -2269,6 +2522,7 @@ export default function App() {
               activeTabId={activeTabId}
               onSelectTab={handleSelectWorkspaceTab}
               onAddNewTab={handleAddNewPatientTab}
+              onAddBlankTab={handleAddBlankPatientTab}
               onDuplicateActiveTab={handleDuplicateActiveTab}
               onCloseTab={handleCloseWorkspaceTab}
               onUpdateTabPatientName={handleUpdateTabPatientName}
@@ -2317,6 +2571,8 @@ export default function App() {
               onClearCriticalAlert={() => setCriticalAlert(undefined)}
               genderMismatch={genderMismatch}
               onSanitizeGenderMismatch={handleSanitizeGenderMismatch}
+              onOpenHisWorklist={() => setIsHisWorklistOpen(true)}
+              hisPendingCount={hisPendingCount}
             />
           )}
 
@@ -3153,6 +3409,52 @@ export default function App() {
           setSettings((prev) => ({ ...prev, darkMode: nextDark }));
           StorageService.saveSettings({ darkMode: nextDark });
         }}
+      />
+      <HisWorklistModal
+        isOpen={isHisWorklistOpen}
+        onClose={() => setIsHisWorklistOpen(false)}
+        worklist={hisWorklist}
+        savedReports={savedReports}
+        onSaveWorklist={(items, mode) => {
+          const updated = StorageService.saveHisWorklist(items, mode);
+          setHisWorklist(updated);
+          if (settings.autoFolderBackupEnabled) {
+            IndexedDbService.syncWithSharedFolder({ requestPermission: false });
+          }
+          showToast(
+            mode === 'replace'
+              ? `لیست HIS با ${items.length} بیمار جایگزین و ذخیره شد.`
+              : `${items.length} بیمار جدید به لیست HIS اضافه شد.`
+          );
+        }}
+        onRemovePatient={(id) => {
+          const updated = StorageService.removeHisWorklistPatient(id);
+          setHisWorklist(updated);
+          if (settings.autoFolderBackupEnabled) {
+            IndexedDbService.syncWithSharedFolder({ requestPermission: false });
+          }
+        }}
+        onRemoveMultiplePatients={(ids) => {
+          let latest = hisWorklist;
+          ids.forEach((id) => {
+            latest = StorageService.removeHisWorklistPatient(id);
+          });
+          setHisWorklist(latest);
+          if (settings.autoFolderBackupEnabled) {
+            IndexedDbService.syncWithSharedFolder({ requestPermission: false });
+          }
+          showToast(`${ids.length} بیمار از لیست HIS حذف شد.`);
+        }}
+        onClearWorklist={() => {
+          StorageService.clearHisWorklist();
+          setHisWorklist([]);
+          if (settings.autoFolderBackupEnabled) {
+            IndexedDbService.syncWithSharedFolder({ requestPermission: false });
+          }
+          showToast('لیست بیماران HIS پاکسازی شد.');
+        }}
+        onSelectPatient={handleSelectHisPatient}
+        onOpenMultiplePatients={handleOpenMultipleHisPatients}
       />
     </div>
   );

@@ -240,9 +240,10 @@ export const IndexedDbService = {
   },
 
   /**
-   * True Bidirectional Multi-PC Shared Folder Sync (Conflict-Free Per-Workstation Files):
+   * True Bidirectional Multi-PC Shared Folder Sync (Conflict-Free Per-Workstation Files + Tombstone Deletion Tracking):
    * Each hospital PC writes ONLY its own file (`radioreport_sync_<workstationId>.json`) inside the Windows Shared Folder,
-   * and reads/merges ALL `radioreport_sync_*.json` files from every other PC so there are ZERO file-locking conflicts.
+   * and reads/merges OTHER PCs' `radioreport_sync_*.json` files (skipping its own previous file so local deletions & edits
+   * never resurrect!) with per-entity timestamps and deletion tombstones.
    */
   async syncWithSharedFolder(options?: { requestPermission?: boolean }): Promise<{
     ok: boolean;
@@ -256,33 +257,76 @@ export const IndexedDbService = {
     timestamp?: string;
     error?: string;
   }> {
-    const mergeById = (baseList: any[] = [], incomingList: any[] = []): any[] => {
+    const getEntityTimestamp = (item: any): number => {
+      if (!item || typeof item !== 'object') return 0;
+      const raw = item.updatedAt || item.lastUsedAt || item.importedAt || item.createdAt || 0;
+      const ts = new Date(raw).getTime();
+      return Number.isFinite(ts) ? ts : 0;
+    };
+
+    const mergeTombstones = (baseMap: any = {}, incomingMap: any = {}): any => {
+      const result: any = { ...(baseMap || {}) };
+      if (!incomingMap || typeof incomingMap !== 'object') return result;
+      for (const collection of Object.keys(incomingMap)) {
+        const incBucket = incomingMap[collection];
+        if (!incBucket || typeof incBucket !== 'object') continue;
+        const mergedBucket: Record<string, string> = { ...(result[collection] || {}) };
+        for (const [id, delIso] of Object.entries(incBucket)) {
+          if (typeof delIso !== 'string') continue;
+          const prevTs = mergedBucket[id] ? new Date(mergedBucket[id]).getTime() || 0 : 0;
+          const nextTs = new Date(delIso).getTime() || 0;
+          if (nextTs > prevTs) {
+            mergedBucket[id] = delIso;
+          }
+        }
+        result[collection] = mergedBucket;
+      }
+      return result;
+    };
+
+    const isSuppressedByTombstone = (item: any, tombstones?: Record<string, string>): boolean => {
+      if (!item || !item.id || !tombstones) return false;
+      const delIso = tombstones[String(item.id)];
+      if (!delIso) return false;
+      const delTs = new Date(delIso).getTime() || 0;
+      if (delTs <= 0) return false;
+      const itemTs = getEntityTimestamp(item);
+      // If deletion happened after (or at) the item's last edit, suppress it permanently
+      return delTs >= itemTs;
+    };
+
+    const mergeById = (
+      baseList: any[] = [],
+      incomingList: any[] = [],
+      tombstones?: Record<string, string>
+    ): any[] => {
       const map = new Map<string, any>();
       for (const item of baseList || []) {
-        if (item && item.id) map.set(String(item.id), item);
+        if (item && item.id && !isSuppressedByTombstone(item, tombstones)) {
+          map.set(String(item.id), item);
+        }
       }
       for (const item of incomingList || []) {
-        if (item && item.id) {
-          const key = String(item.id);
-          const existing = map.get(key);
-          if (!existing) {
-            map.set(key, item);
-          } else {
-            const existingTime = new Date(existing.updatedAt || existing.createdAt || 0).getTime() || 0;
-            const incomingTime = new Date(item.updatedAt || item.createdAt || 0).getTime() || 0;
-            if (incomingTime > existingTime) {
-              map.set(key, {
-                ...existing,
-                ...item,
-                usageCount: Math.max(existing.usageCount || 0, item.usageCount || 0),
-              });
-            } else if (incomingTime === existingTime) {
-              map.set(key, {
-                ...existing,
-                ...item,
-                signatureUrl: item.signatureUrl || existing.signatureUrl,
-                usageCount: Math.max(existing.usageCount || 0, item.usageCount || 0),
-              });
+        if (!item || !item.id || isSuppressedByTombstone(item, tombstones)) continue;
+        const key = String(item.id);
+        const existing = map.get(key);
+        if (!existing) {
+          map.set(key, item);
+        } else {
+          const existingTime = getEntityTimestamp(existing);
+          const incomingTime = getEntityTimestamp(item);
+          // Strict Last-Write-Wins: ONLY replace local item when incoming is strictly newer!
+          // Never overwrite local edits or removed signatures when timestamps tie.
+          if (incomingTime > existingTime) {
+            map.set(key, {
+              ...existing,
+              ...item,
+              usageCount: Math.max(existing.usageCount || 0, item.usageCount || 0),
+            });
+          } else if (existingTime === incomingTime) {
+            const maxUsage = Math.max(existing.usageCount || 0, item.usageCount || 0);
+            if (maxUsage !== (existing.usageCount || 0)) {
+              map.set(key, { ...existing, usageCount: maxUsage });
             }
           }
         }
@@ -379,86 +423,187 @@ export const IndexedDbService = {
 
       directoryHandleMemory = handle;
 
+      const workstationId = this.getWorkstationId();
+      const myFileName = `radioreport_sync_${workstationId}.json`;
+
       const localReports = StorageService.getSavedReports();
       const localTemplates = StorageService.getTemplates();
       const localDoctors = StorageService.getDoctors();
       const localTypists = StorageService.getTypists();
       const localShortcuts = StorageService.getShortcuts();
       const localReferring = StorageService.getReferringPhysicians();
+      const localHisWorklist = StorageService.getHisWorklist();
       const localSettings = StorageService.getSettings();
+      const localDeletedRecords = StorageService.getDeletedRecords();
       const localSettingsTs =
         new Date(localStorage.getItem('radioreport_settings_updated_at') || 0).getTime() || 0;
 
-      const beforeSig = JSON.stringify({
-        r: localReports.map((x: any) => `${x.id}:${x.updatedAt || x.createdAt || ''}`),
-        t: localTemplates.map((x: any) => `${x.id}:${x.updatedAt || ''}:${x.title || ''}`),
-        d: localDoctors.map((x: any) => `${x.id}:${x.name || ''}`),
-        y: localTypists.map((x: any) => `${x.id}:${x.name || ''}`),
-        s: localShortcuts.map((x: any) => `${x.id}:${x.code || ''}`),
-        clinic: localSettings.clinicName || '',
-        dictLen: localSettings.customDictionary?.length || 0,
+      const buildSignature = (state: {
+        reports: any[];
+        templates: any[];
+        doctors: any[];
+        typists: any[];
+        shortcuts: any[];
+        referring: any[];
+        hisWorklist: any[];
+        settings: any;
+        deletedRecords: any;
+      }) =>
+        JSON.stringify({
+          r: state.reports.map((x: any) => `${x.id}:${x.updatedAt || x.createdAt || ''}`),
+          t: state.templates.map((x: any) => `${x.id}:${x.updatedAt || ''}:${x.title || ''}`),
+          d: state.doctors.map(
+            (x: any) =>
+              `${x.id}:${x.updatedAt || ''}:${x.name || ''}:${x.specialty || ''}:${(x.signatureUrl || '').length}`
+          ),
+          y: state.typists.map((x: any) => `${x.id}:${x.updatedAt || ''}:${x.name || ''}`),
+          s: state.shortcuts.map((x: any) => `${x.id}:${x.updatedAt || ''}:${x.trigger || ''}`),
+          ref: state.referring.map((x: any) => `${x.id}:${x.name || ''}:${x.usageCount || 0}`),
+          his: state.hisWorklist.map((x: any) => `${x.id}:${x.admissionNumber || ''}:${x.fullName || ''}`),
+          clinic: `${state.settings.clinicName || ''}|${(state.settings.clinicLogoUrl || '').length}|${(state.settings.doctorSignatureUrl || '').length}`,
+          dictLen: state.settings.customDictionary?.length || 0,
+          del: state.deletedRecords,
+        });
+
+      const beforeSig = buildSignature({
+        reports: localReports,
+        templates: localTemplates,
+        doctors: localDoctors,
+        typists: localTypists,
+        shortcuts: localShortcuts,
+        referring: localReferring,
+        hisWorklist: localHisWorklist,
+        settings: localSettings,
+        deletedRecords: localDeletedRecords,
       });
 
-      let mergedReports = [...localReports];
-      let mergedTemplates = [...localTemplates];
-      let mergedDoctors = [...localDoctors];
-      let mergedTypists = [...localTypists];
-      let mergedShortcuts = [...localShortcuts];
-      let mergedReferring = [...localReferring];
-      let mergedSettings = { ...localSettings };
-      let mergedSettingsTs = localSettingsTs;
-
-      const peerFiles: any[] = [];
+      const allSyncFiles: any[] = [];
+      const otherPeerFiles: any[] = [];
       const fallbackBackupFiles: any[] = [];
 
       if (typeof handle.entries === 'function') {
         for await (const [entryName, entryHandle] of handle.entries()) {
           if (entryHandle.kind !== 'file') continue;
           if (/^radioreport_sync_.+\.json$/i.test(entryName)) {
-            peerFiles.push({ name: entryName, handle: entryHandle });
+            allSyncFiles.push({ name: entryName, handle: entryHandle });
+            // CRITICAL: Skip our own previous sync file so local deletions & signature edits NEVER resurrect!
+            if (entryName.toLowerCase() !== myFileName.toLowerCase()) {
+              otherPeerFiles.push({ name: entryName, handle: entryHandle });
+            }
           } else if (/^RadioReport_AutoBackup_.+\.json$/i.test(entryName)) {
             fallbackBackupFiles.push({ name: entryName, handle: entryHandle });
           }
         }
       }
 
-      const filesToMerge =
-        peerFiles.length > 0
-          ? peerFiles
-          : fallbackBackupFiles
-              .sort((a, b) => b.name.localeCompare(a.name))
-              .slice(0, 3);
+      // Only fall back to AutoBackup files if NO sync files exist at all (e.g., disaster recovery on a fresh PC)
+      const filesToRead =
+        otherPeerFiles.length > 0
+          ? otherPeerFiles
+          : allSyncFiles.length === 0 && !StorageService.isUserTouched()
+          ? fallbackBackupFiles.sort((a, b) => b.name.localeCompare(a.name)).slice(0, 1)
+          : [];
 
-      for (const entry of filesToMerge) {
+      const parsedPeers: any[] = [];
+      for (const entry of filesToRead) {
         try {
           const file = await entry.handle.getFile();
           const text = await file.text();
           if (!text) continue;
           const parsed = JSON.parse(text);
-          if (!parsed || typeof parsed !== 'object') continue;
-          if (Array.isArray(parsed.reports)) mergedReports = mergeById(mergedReports, parsed.reports);
-          if (Array.isArray(parsed.templates)) mergedTemplates = mergeById(mergedTemplates, parsed.templates);
-          if (Array.isArray(parsed.doctors)) mergedDoctors = mergeById(mergedDoctors, parsed.doctors);
-          if (Array.isArray(parsed.typists)) mergedTypists = mergeById(mergedTypists, parsed.typists);
-          if (Array.isArray(parsed.shortcuts)) mergedShortcuts = mergeById(mergedShortcuts, parsed.shortcuts);
-          if (Array.isArray(parsed.referringPhysicians)) {
-            mergedReferring = mergeById(mergedReferring, parsed.referringPhysicians);
-          }
-          if (parsed.settings && typeof parsed.settings === 'object') {
-            const incomingTs =
-              new Date(parsed.settingsUpdatedAt || parsed.syncedAt || 0).getTime() || 0;
-            const resSettings = mergeSettings(
-              mergedSettings,
-              mergedSettingsTs,
-              parsed.settings,
-              incomingTs
-            );
-            mergedSettings = resSettings.settings;
-            mergedSettingsTs = resSettings.updatedAt;
+          if (parsed && typeof parsed === 'object') {
+            parsedPeers.push(parsed);
           }
         } catch {
           // Ignore partially written or unreadable peer file during concurrent save; next cycle picks it up
         }
+      }
+
+      // Step 1: Merge all deletion tombstones first across local + all peers
+      let mergedDeletedRecords = { ...localDeletedRecords };
+      for (const parsed of parsedPeers) {
+        if (parsed.deletedRecords && typeof parsed.deletedRecords === 'object') {
+          mergedDeletedRecords = mergeTombstones(mergedDeletedRecords, parsed.deletedRecords);
+        }
+      }
+
+      // Step 2: Fresh Workstation Protection!
+      // If this PC has NEVER been customized by the user yet AND other clinic PCs already exist in the shared folder,
+      // adopt the clinic's exact doctors/typists/templates/shortcuts/referring/settings instead of injecting factory defaults!
+      const adoptFreshFromPeers = !StorageService.isUserTouched() && parsedPeers.length > 0;
+
+      let mergedReports = adoptFreshFromPeers ? [] : [...localReports];
+      let mergedTemplates = adoptFreshFromPeers ? [] : [...localTemplates];
+      let mergedDoctors = adoptFreshFromPeers ? [] : [...localDoctors];
+      let mergedTypists = adoptFreshFromPeers ? [] : [...localTypists];
+      let mergedShortcuts = adoptFreshFromPeers ? [] : [...localShortcuts];
+      let mergedReferring = adoptFreshFromPeers ? [] : [...localReferring];
+      let mergedHisWorklist = adoptFreshFromPeers ? [] : [...localHisWorklist];
+      let mergedSettings = { ...localSettings };
+      let mergedSettingsTs = adoptFreshFromPeers ? 0 : localSettingsTs;
+
+      // Apply merged tombstones even to local lists immediately
+      mergedReports = mergeById(mergedReports, [], mergedDeletedRecords.reports);
+      mergedTemplates = mergeById(mergedTemplates, [], mergedDeletedRecords.templates);
+      mergedDoctors = mergeById(mergedDoctors, [], mergedDeletedRecords.doctors);
+      mergedTypists = mergeById(mergedTypists, [], mergedDeletedRecords.typists);
+      mergedShortcuts = mergeById(mergedShortcuts, [], mergedDeletedRecords.shortcuts);
+      mergedReferring = mergeById(mergedReferring, [], mergedDeletedRecords.referringPhysicians);
+      mergedHisWorklist = mergeById(mergedHisWorklist, [], mergedDeletedRecords.hisWorklist);
+
+      // Step 3: Merge all peer snapshots with tombstone suppression & strict updatedAt LWW
+      for (const parsed of parsedPeers) {
+        if (Array.isArray(parsed.reports)) {
+          mergedReports = mergeById(mergedReports, parsed.reports, mergedDeletedRecords.reports);
+        }
+        if (Array.isArray(parsed.templates)) {
+          mergedTemplates = mergeById(mergedTemplates, parsed.templates, mergedDeletedRecords.templates);
+        }
+        if (Array.isArray(parsed.doctors)) {
+          mergedDoctors = mergeById(mergedDoctors, parsed.doctors, mergedDeletedRecords.doctors);
+        }
+        if (Array.isArray(parsed.typists)) {
+          mergedTypists = mergeById(mergedTypists, parsed.typists, mergedDeletedRecords.typists);
+        }
+        if (Array.isArray(parsed.shortcuts)) {
+          mergedShortcuts = mergeById(mergedShortcuts, parsed.shortcuts, mergedDeletedRecords.shortcuts);
+        }
+        if (Array.isArray(parsed.referringPhysicians)) {
+          mergedReferring = mergeById(
+            mergedReferring,
+            parsed.referringPhysicians,
+            mergedDeletedRecords.referringPhysicians
+          );
+        }
+        if (Array.isArray(parsed.hisWorklist)) {
+          mergedHisWorklist = mergeById(
+            mergedHisWorklist,
+            parsed.hisWorklist,
+            mergedDeletedRecords.hisWorklist
+          );
+        }
+        if (parsed.settings && typeof parsed.settings === 'object') {
+          const incomingTs =
+            new Date(parsed.settingsUpdatedAt || parsed.syncedAt || 0).getTime() || 0;
+          const resSettings = mergeSettings(
+            mergedSettings,
+            mergedSettingsTs,
+            parsed.settings,
+            incomingTs
+          );
+          mergedSettings = resSettings.settings;
+          mergedSettingsTs = resSettings.updatedAt;
+        }
+      }
+
+      // Safety fallback if fresh adoption found peers without doctors/typists keys
+      if (adoptFreshFromPeers) {
+        if (mergedDoctors.length === 0 && localDoctors.length > 0) mergedDoctors = [...localDoctors];
+        if (mergedTypists.length === 0 && localTypists.length > 0) mergedTypists = [...localTypists];
+        if (mergedTemplates.length === 0 && localTemplates.length > 0) mergedTemplates = [...localTemplates];
+        if (mergedShortcuts.length === 0 && localShortcuts.length > 0) mergedShortcuts = [...localShortcuts];
+        if (mergedReferring.length === 0 && localReferring.length > 0) mergedReferring = [...localReferring];
+        StorageService.markUserTouched();
       }
 
       mergedReports.sort(
@@ -467,14 +612,16 @@ export const IndexedDbService = {
           new Date(a.updatedAt || a.createdAt || 0).getTime()
       );
 
-      const afterSig = JSON.stringify({
-        r: mergedReports.map((x: any) => `${x.id}:${x.updatedAt || x.createdAt || ''}`),
-        t: mergedTemplates.map((x: any) => `${x.id}:${x.updatedAt || ''}:${x.title || ''}`),
-        d: mergedDoctors.map((x: any) => `${x.id}:${x.name || ''}`),
-        y: mergedTypists.map((x: any) => `${x.id}:${x.name || ''}`),
-        s: mergedShortcuts.map((x: any) => `${x.id}:${x.code || ''}`),
-        clinic: mergedSettings.clinicName || '',
-        dictLen: mergedSettings.customDictionary?.length || 0,
+      const afterSig = buildSignature({
+        reports: mergedReports,
+        templates: mergedTemplates,
+        doctors: mergedDoctors,
+        typists: mergedTypists,
+        shortcuts: mergedShortcuts,
+        referring: mergedReferring,
+        hisWorklist: mergedHisWorklist,
+        settings: mergedSettings,
+        deletedRecords: mergedDeletedRecords,
       });
 
       const changed = beforeSig !== afterSig;
@@ -486,12 +633,16 @@ export const IndexedDbService = {
         StorageService.saveTypists(mergedTypists);
         StorageService.saveShortcuts(mergedShortcuts);
         StorageService.saveReferringPhysicians(mergedReferring);
+        StorageService.saveHisWorklist(mergedHisWorklist);
+        StorageService.saveDeletedRecords(mergedDeletedRecords);
         StorageService.saveSettings(mergedSettings);
         if (mergedSettingsTs > 0) {
           localStorage.setItem(
             'radioreport_settings_updated_at',
             new Date(mergedSettingsTs).toISOString()
           );
+        } else {
+          localStorage.removeItem('radioreport_settings_updated_at');
         }
         await Promise.all([
           this.setItem('reports', mergedReports),
@@ -503,20 +654,20 @@ export const IndexedDbService = {
       }
 
       // Write this workstation's own conflict-free sync file into the shared folder
-      const workstationId = this.getWorkstationId();
-      const myFileName = `radioreport_sync_${workstationId}.json`;
       const nowIso = new Date().toISOString();
       const snapshotPayload = {
-        version: '1.3',
+        version: '1.4',
         workstationId,
         syncedAt: nowIso,
         settingsUpdatedAt: mergedSettingsTs > 0 ? new Date(mergedSettingsTs).toISOString() : undefined,
+        deletedRecords: mergedDeletedRecords,
         reports: mergedReports,
         templates: mergedTemplates,
         doctors: mergedDoctors,
         typists: mergedTypists,
         shortcuts: mergedShortcuts,
         referringPhysicians: mergedReferring,
+        hisWorklist: mergedHisWorklist,
         settings: mergedSettings,
       };
 
@@ -537,7 +688,7 @@ export const IndexedDbService = {
         `${nowIso.slice(0, 10)} (${timeFormatted})`
       );
 
-      const uniquePeers = new Set(peerFiles.map((f) => f.name));
+      const uniquePeers = new Set(allSyncFiles.map((f) => f.name));
       uniquePeers.add(myFileName);
 
       return {

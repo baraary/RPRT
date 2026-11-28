@@ -1,4 +1,18 @@
-import { Doctor, MedicalTemplate, MedicalShortcut, MedicalReport, ReportRevision, AppSettings, Modality, PatientWorkspaceTab, Typist, ReferringPhysicianItem } from '../types';
+import {
+  Doctor,
+  MedicalTemplate,
+  MedicalShortcut,
+  MedicalReport,
+  ReportRevision,
+  AppSettings,
+  Modality,
+  PatientWorkspaceTab,
+  Typist,
+  ReferringPhysicianItem,
+  SyncCollectionKey,
+  DeletedRecordsMap,
+  HisWorklistPatient,
+} from '../types';
 import { DEFAULT_DOCTORS } from '../data/defaultDoctors';
 import { DEFAULT_TEMPLATES } from '../data/defaultTemplates';
 import { DEFAULT_SHORTCUTS } from '../data/defaultShortcuts';
@@ -14,6 +28,9 @@ const STORAGE_KEYS = {
   SETTINGS: 'radioreport_settings_v1',
   ACTIVE_DRAFT: 'radioreport_active_draft_v1',
   OPEN_TABS: 'radioreport_open_tabs_v1',
+  DELETED_RECORDS: 'radioreport_deleted_records_v1',
+  HIS_WORKLIST: 'radioreport_his_worklist_v1',
+  USER_TOUCHED: 'radioreport_user_touched_v1',
 };
 
 // Full in-memory archive (synced with IndexedDB & SQLite LAN DB) so hundreds of thousands / millions of reports work without hitting the 5MB localStorage wall
@@ -164,31 +181,147 @@ const DEFAULT_SETTINGS: AppSettings = {
 };
 
 export const StorageService = {
+  // SYNC TOMBSTONES & USER-TOUCHED TRACKING (Prevents deleted defaults or old signatures from ever resurrecting across PCs)
+  isUserTouched(): boolean {
+    try {
+      return localStorage.getItem(STORAGE_KEYS.USER_TOUCHED) === 'true';
+    } catch {
+      return false;
+    }
+  },
+
+  markUserTouched(): void {
+    try {
+      localStorage.setItem(STORAGE_KEYS.USER_TOUCHED, 'true');
+    } catch {}
+  },
+
+  getDeletedRecords(): DeletedRecordsMap {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.DELETED_RECORDS);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  },
+
+  saveDeletedRecords(map: DeletedRecordsMap): void {
+    try {
+      localStorage.setItem(STORAGE_KEYS.DELETED_RECORDS, JSON.stringify(map));
+    } catch {}
+  },
+
+  markDeleted(collection: SyncCollectionKey, id: string): void {
+    if (!id) return;
+    const map = this.getDeletedRecords();
+    const bucket = { ...(map[collection] || {}) };
+    bucket[String(id)] = new Date().toISOString();
+    map[collection] = bucket;
+    this.saveDeletedRecords(map);
+    this.markUserTouched();
+  },
+
+  markManyDeleted(collection: SyncCollectionKey, ids: string[]): void {
+    if (!ids || ids.length === 0) return;
+    const map = this.getDeletedRecords();
+    const bucket = { ...(map[collection] || {}) };
+    const now = new Date().toISOString();
+    ids.forEach((id) => {
+      if (id) bucket[String(id)] = now;
+    });
+    map[collection] = bucket;
+    this.saveDeletedRecords(map);
+    this.markUserTouched();
+  },
+
+  unmarkDeleted(collection: SyncCollectionKey, id: string): void {
+    if (!id) return;
+    const map = this.getDeletedRecords();
+    const bucket = map[collection];
+    if (bucket && bucket[String(id)]) {
+      delete bucket[String(id)];
+      this.saveDeletedRecords(map);
+    }
+  },
+
+  // HIS EXCEL / CSV DAILY WORKLIST
+  getHisWorklist(): HisWorklistPatient[] {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.HIS_WORKLIST);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  },
+
+  saveHisWorklist(
+    items: HisWorklistPatient[],
+    mode?: 'replace' | 'append'
+  ): HisWorklistPatient[] {
+    let finalItems = items;
+    if (mode === 'replace') {
+      const existing = this.getHisWorklist();
+      const incomingIds = new Set(items.map((p) => p.id));
+      const removedIds = existing
+        .filter((p) => !incomingIds.has(p.id))
+        .map((p) => p.id);
+      if (removedIds.length > 0) {
+        this.markManyDeleted('hisWorklist', removedIds);
+      }
+      items.forEach((p) => this.unmarkDeleted('hisWorklist', p.id));
+      this.markUserTouched();
+      finalItems = items;
+    } else if (mode === 'append') {
+      const existing = this.getHisWorklist();
+      const map = new Map<string, HisWorklistPatient>();
+      existing.forEach((p) => map.set(p.id, p));
+      items.forEach((p) => {
+        this.unmarkDeleted('hisWorklist', p.id);
+        map.set(p.id, p);
+      });
+      this.markUserTouched();
+      finalItems = Array.from(map.values());
+    }
+    try {
+      localStorage.setItem(STORAGE_KEYS.HIS_WORKLIST, JSON.stringify(finalItems));
+    } catch {}
+    return finalItems;
+  },
+
+  removeHisWorklistPatient(id: string): HisWorklistPatient[] {
+    const next = this.getHisWorklist().filter((p) => p.id !== id);
+    this.saveHisWorklist(next);
+    this.markDeleted('hisWorklist', id);
+    return next;
+  },
+
+  clearHisWorklist(): void {
+    const existing = this.getHisWorklist();
+    if (existing.length > 0) {
+      this.markManyDeleted(
+        'hisWorklist',
+        existing.map((p) => p.id)
+      );
+    }
+    this.saveHisWorklist([]);
+  },
+
   // DOCTORS (هر پزشک دارای امضای دیجیتال کاملاً مستقل است)
   getDoctors(): Doctor[] {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.DOCTORS);
-      if (!data) {
+      if (data === null) {
         localStorage.setItem(STORAGE_KEYS.DOCTORS, JSON.stringify(DEFAULT_DOCTORS));
         return DEFAULT_DOCTORS;
       }
       const parsed: Doctor[] = JSON.parse(data);
-      if (!Array.isArray(parsed) || parsed.length === 0) return DEFAULT_DOCTORS;
-      let changed = false;
-      const hydrated = parsed.map((doc) => {
-        if (doc.signatureUrl === undefined) {
-          const defDoc = DEFAULT_DOCTORS.find((d) => d.id === doc.id);
-          if (defDoc?.signatureUrl) {
-            changed = true;
-            return { ...doc, signatureUrl: defDoc.signatureUrl };
-          }
-        }
-        return doc;
-      });
-      if (changed) {
-        localStorage.setItem(STORAGE_KEYS.DOCTORS, JSON.stringify(hydrated));
-      }
-      return hydrated;
+      if (!Array.isArray(parsed)) return DEFAULT_DOCTORS;
+      // Never re-inject deleted default doctors or overwrite intentionally removed signatures
+      return parsed;
     } catch {
       return DEFAULT_DOCTORS;
     }
@@ -203,21 +336,30 @@ export const StorageService = {
     const newDoc: Doctor = {
       ...doctor,
       id: `doc-${Date.now()}`,
+      updatedAt: new Date().toISOString(),
     };
     doctors.push(newDoc);
     this.saveDoctors(doctors);
+    this.unmarkDeleted('doctors', newDoc.id);
+    this.markUserTouched();
     return newDoc;
   },
 
   updateDoctor(id: string, updates: Partial<Doctor>): Doctor[] {
-    const doctors = this.getDoctors().map((d) => (d.id === id ? { ...d, ...updates } : d));
+    const now = new Date().toISOString();
+    const doctors = this.getDoctors().map((d) =>
+      d.id === id ? { ...d, ...updates, updatedAt: now } : d
+    );
     this.saveDoctors(doctors);
+    this.unmarkDeleted('doctors', id);
+    this.markUserTouched();
     return doctors;
   },
 
   deleteDoctor(id: string): Doctor[] {
     const doctors = this.getDoctors().filter((d) => d.id !== id);
     this.saveDoctors(doctors);
+    this.markDeleted('doctors', id);
     return doctors;
   },
 
@@ -226,12 +368,12 @@ export const StorageService = {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.REFERRING_PHYSICIANS);
       let list: ReferringPhysicianItem[];
-      if (!data) {
+      if (data === null) {
         localStorage.setItem(STORAGE_KEYS.REFERRING_PHYSICIANS, JSON.stringify(DEFAULT_REFERRING_PHYSICIANS));
         list = [...DEFAULT_REFERRING_PHYSICIANS];
       } else {
         const parsed = JSON.parse(data);
-        list = Array.isArray(parsed) && parsed.length > 0 ? parsed : [...DEFAULT_REFERRING_PHYSICIANS];
+        list = Array.isArray(parsed) ? parsed : [...DEFAULT_REFERRING_PHYSICIANS];
       }
       return list.sort((a, b) => {
         if ((b.usageCount || 0) !== (a.usageCount || 0)) {
@@ -262,23 +404,30 @@ export const StorageService = {
         ...list[existingIdx],
         usageCount: (list[existingIdx].usageCount || 0) + 1,
         lastUsedAt: nowIso,
+        updatedAt: nowIso,
       };
+      this.unmarkDeleted('referringPhysicians', list[existingIdx].id);
     } else {
+      const newId = `ref-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
       list.push({
-        id: `ref-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        id: newId,
         name: cleanName,
         usageCount: 1,
         lastUsedAt: nowIso,
+        updatedAt: nowIso,
       });
+      this.unmarkDeleted('referringPhysicians', newId);
     }
 
     this.saveReferringPhysicians(list);
+    this.markUserTouched();
     return this.getReferringPhysicians();
   },
 
   deleteReferringPhysician(id: string): ReferringPhysicianItem[] {
     const list = this.getReferringPhysicians().filter((item) => item.id !== id);
     this.saveReferringPhysicians(list);
+    this.markDeleted('referringPhysicians', id);
     return list;
   },
 
@@ -286,12 +435,12 @@ export const StorageService = {
   getTypists(): Typist[] {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.TYPISTS);
-      if (!data) {
+      if (data === null) {
         localStorage.setItem(STORAGE_KEYS.TYPISTS, JSON.stringify(DEFAULT_TYPISTS));
         return DEFAULT_TYPISTS;
       }
       const parsed = JSON.parse(data);
-      return Array.isArray(parsed) && parsed.length > 0 ? parsed : DEFAULT_TYPISTS;
+      return Array.isArray(parsed) ? parsed : DEFAULT_TYPISTS;
     } catch {
       return DEFAULT_TYPISTS;
     }
@@ -306,21 +455,30 @@ export const StorageService = {
     const newTypist: Typist = {
       ...typist,
       id: `typ-${Date.now()}`,
+      updatedAt: new Date().toISOString(),
     };
     list.push(newTypist);
     this.saveTypists(list);
+    this.unmarkDeleted('typists', newTypist.id);
+    this.markUserTouched();
     return newTypist;
   },
 
   updateTypist(id: string, updates: Partial<Typist>): Typist[] {
-    const list = this.getTypists().map((t) => (t.id === id ? { ...t, ...updates } : t));
+    const now = new Date().toISOString();
+    const list = this.getTypists().map((t) =>
+      t.id === id ? { ...t, ...updates, updatedAt: now } : t
+    );
     this.saveTypists(list);
+    this.unmarkDeleted('typists', id);
+    this.markUserTouched();
     return list;
   },
 
   deleteTypist(id: string): Typist[] {
     const list = this.getTypists().filter((t) => t.id !== id);
     this.saveTypists(list);
+    this.markDeleted('typists', id);
     return list;
   },
 
@@ -380,11 +538,21 @@ export const StorageService = {
   },
 
   deleteAllTemplates(modality: Modality | 'all' = 'all'): MedicalTemplate[] {
+    const current = this.getTemplates();
     if (modality === 'all') {
+      this.markManyDeleted(
+        'templates',
+        current.map((t) => t.id)
+      );
       this.saveTemplates([]);
       return [];
     }
-    const remaining = this.getTemplates().filter((t) => t.modality !== modality);
+    const toRemove = current.filter((t) => t.modality === modality);
+    this.markManyDeleted(
+      'templates',
+      toRemove.map((t) => t.id)
+    );
+    const remaining = current.filter((t) => t.modality !== modality);
     this.saveTemplates(remaining);
     return remaining;
   },
@@ -408,6 +576,8 @@ export const StorageService = {
     };
     templates.unshift(newTpl);
     this.saveTemplates(templates);
+    this.unmarkDeleted('templates', newTpl.id);
+    this.markUserTouched();
     return newTpl;
   },
 
@@ -416,6 +586,8 @@ export const StorageService = {
       t.id === id ? { ...t, ...updates, updatedAt: new Date().toISOString() } : t
     );
     this.saveTemplates(templates);
+    this.unmarkDeleted('templates', id);
+    this.markUserTouched();
     return templates;
   },
 
@@ -424,12 +596,14 @@ export const StorageService = {
       t.id === id ? { ...t, isPinned: !t.isPinned, updatedAt: new Date().toISOString() } : t
     );
     this.saveTemplates(templates);
+    this.markUserTouched();
     return templates;
   },
 
   deleteTemplate(id: string): MedicalTemplate[] {
     const templates = this.getTemplates().filter((t) => t.id !== id);
     this.saveTemplates(templates);
+    this.markDeleted('templates', id);
     return templates;
   },
 
@@ -524,21 +698,30 @@ export const StorageService = {
     const newSc: MedicalShortcut = {
       ...shortcut,
       id: `sc-${Date.now()}`,
+      updatedAt: new Date().toISOString(),
     };
     list.push(newSc);
     this.saveShortcuts(list);
+    this.unmarkDeleted('shortcuts', newSc.id);
+    this.markUserTouched();
     return newSc;
   },
 
   updateShortcut(id: string, updates: Partial<MedicalShortcut>): MedicalShortcut[] {
-    const list = this.getShortcuts().map((sc) => (sc.id === id ? { ...sc, ...updates } : sc));
+    const now = new Date().toISOString();
+    const list = this.getShortcuts().map((sc) =>
+      sc.id === id ? { ...sc, ...updates, updatedAt: now } : sc
+    );
     this.saveShortcuts(list);
+    this.unmarkDeleted('shortcuts', id);
+    this.markUserTouched();
     return list;
   },
 
   deleteShortcut(id: string): MedicalShortcut[] {
     const list = this.getShortcuts().filter((sc) => sc.id !== id);
     this.saveShortcuts(list);
+    this.markDeleted('shortcuts', id);
     return list;
   },
 
@@ -718,6 +901,8 @@ export const StorageService = {
     }
 
     persistReportsToHotCache(reports);
+    this.unmarkDeleted('reports', updatedReport.id);
+    this.markUserTouched();
     return updatedReport;
   },
 
@@ -733,6 +918,7 @@ export const StorageService = {
     };
     reports[idx] = updated;
     persistReportsToHotCache(reports);
+    this.markUserTouched();
     return updated;
   },
 
@@ -743,6 +929,7 @@ export const StorageService = {
   deleteReport(id: string): MedicalReport[] {
     const reports = this.getSavedReports().filter((r) => r.id !== id);
     persistReportsToHotCache(reports);
+    this.markDeleted('reports', id);
     return reports;
   },
 
@@ -830,6 +1017,7 @@ export const StorageService = {
     const updated = { ...current, ...settings };
     localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(updated));
     localStorage.setItem('radioreport_settings_updated_at', new Date().toISOString());
+    this.markUserTouched();
     return updated;
   },
 

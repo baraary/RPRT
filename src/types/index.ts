@@ -12,6 +12,7 @@ export interface Doctor {
   stampFontSize?: number; // سایز فونت نام پزشک در مهر چاپی (مثلاً 12 تا 18 پیکسل)
   signatureUrl?: string; // تصویر امضا و مهر دیجیتال اختصاصی پزشک
   isDefault?: boolean;
+  updatedAt?: string;
 }
 
 export interface MedicalTemplate {
@@ -38,6 +39,7 @@ export interface ReferringPhysicianItem {
   name: string;
   usageCount: number;
   lastUsedAt?: string;
+  updatedAt?: string;
 }
 
 export interface MedicalShortcut {
@@ -51,6 +53,7 @@ export interface MedicalShortcut {
   hotkey?: string; // e.g., "Alt+T", "Alt+M", "Ctrl+Shift+1"
   targetTemplateId?: string; // در صورت اتصال کلید میانبر به یک قالب خاص آماده
   isAutocorrect?: boolean; // true if plain word autocorrect without dot
+  updatedAt?: string;
 }
 
 export interface PatientInfo {
@@ -82,6 +85,7 @@ export interface Typist {
   name: string;
   color: string; // badge color identifier ('sky' | 'indigo' | 'emerald' | 'amber' | 'rose' | 'purple')
   isDefault?: boolean;
+  updatedAt?: string;
 }
 
 export interface ReportRevision {
@@ -184,6 +188,33 @@ export interface PatientWorkspaceTab {
   status: 'draft' | 'saved' | 'printed';
   updatedAt: string;
 }
+
+export type SyncCollectionKey =
+  | 'reports'
+  | 'templates'
+  | 'doctors'
+  | 'typists'
+  | 'shortcuts'
+  | 'referringPhysicians'
+  | 'hisWorklist';
+
+export type DeletedRecordsMap = Partial<Record<SyncCollectionKey, Record<string, string>>>;
+
+export interface HisWorklistPatient {
+  id: string;
+  fullName: string;
+  nationalId: string;
+  age: string;
+  gender: 'female' | 'male' | 'other';
+  admissionNumber: string;
+  reportDate: string;
+  referringPhysician: string;
+  serviceName?: string;
+  detectedModality?: Modality;
+  importedAt: string;
+  updatedAt?: string;
+}
+
 
 
 

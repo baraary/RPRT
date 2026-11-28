@@ -3162,18 +3162,27 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
             );
           })}
 
-          {/* Ultra-Slim Single-Line Bar to Add Next Imaging Study for the Same Patient */}
+          {/* Ultra-Slim Single-Line Bar to Add Blank Next Imaging Report for the Same Patient */}
           <div className="py-1.5 px-3 bg-white border border-dashed border-slate-300 hover:border-teal-400 rounded-xl flex items-center justify-between flex-wrap gap-2 shadow-2xs transition-colors">
             <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
               <Plus className="w-3.5 h-3.5 text-teal-600 shrink-0" />
-              <span>افزودن تصویربرداری / گزارش بعدی برای همین بیمار:</span>
+              <span>افزودن گزارش خالی جدید برای همین بیمار:</span>
             </div>
 
-            <div className="flex items-center gap-1.5 shrink-0">
+            <div className="flex items-center gap-1.5 flex-wrap shrink-0">
+              <button
+                type="button"
+                onClick={() => onAddStudy()}
+                className="h-7 px-2.5 bg-slate-900 hover:bg-teal-700 text-white border border-slate-900 hover:border-teal-700 rounded-lg text-[11px] font-bold transition-all cursor-pointer active:scale-95"
+                title="افزودن یک گزارش خالی با مدالیته فعلی برای پر کردن دستی"
+              >
+                + گزارش خالی
+              </button>
               <button
                 type="button"
                 onClick={() => onAddStudy('sonography')}
                 className="h-7 px-2.5 bg-sky-50 hover:bg-sky-600 text-sky-800 hover:text-white border border-sky-200 hover:border-sky-600 rounded-lg text-[11px] font-bold transition-all cursor-pointer active:scale-95"
+                title="افزودن گزارش خالی سونوگرافی"
               >
                 + سونوگرافی
               </button>
@@ -3181,6 +3190,7 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                 type="button"
                 onClick={() => onAddStudy('mri')}
                 className="h-7 px-2.5 bg-indigo-50 hover:bg-indigo-600 text-indigo-800 hover:text-white border border-indigo-200 hover:border-indigo-600 rounded-lg text-[11px] font-bold transition-all cursor-pointer active:scale-95"
+                title="افزودن گزارش خالی ام‌آر‌آی"
               >
                 + ام‌آر‌آی
               </button>
@@ -3188,6 +3198,7 @@ export const RichMedicalEditor: React.FC<RichMedicalEditorProps> = ({
                 type="button"
                 onClick={() => onAddStudy('ct')}
                 className="h-7 px-2.5 bg-emerald-50 hover:bg-emerald-600 text-emerald-800 hover:text-white border border-emerald-200 hover:border-emerald-600 rounded-lg text-[11px] font-bold transition-all cursor-pointer active:scale-95"
+                title="افزودن گزارش خالی سی‌تی‌اسکن"
               >
                 + سی‌تی‌اسکن
               </button>

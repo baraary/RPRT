@@ -14,6 +14,7 @@ import {
   Check,
   ChevronRight,
   ChevronLeft,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { detectGenderFromPersianName, GenderAnatomyMismatch } from '../services/typistUtils';
 import { StorageService } from '../services/storage';
@@ -25,6 +26,8 @@ interface PatientHeaderProps {
   onClearCriticalAlert?: () => void;
   genderMismatch?: GenderAnatomyMismatch;
   onSanitizeGenderMismatch?: () => void;
+  onOpenHisWorklist?: () => void;
+  hisPendingCount?: number;
 }
 
 const PERSIAN_MONTHS = [
@@ -103,6 +106,8 @@ export const PatientHeader: React.FC<PatientHeaderProps> = ({
   onClearCriticalAlert,
   genderMismatch,
   onSanitizeGenderMismatch,
+  onOpenHisWorklist,
+  hisPendingCount = 0,
 }) => {
   const [collapsed, setCollapsed] = useState(false);
   const [autoCompactOnType, setAutoCompactOnType] = useState<boolean>(() => {
@@ -352,7 +357,24 @@ export const PatientHeader: React.FC<PatientHeaderProps> = ({
               )}
             </div>
 
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {onOpenHisWorklist && (
+                <button
+                  type="button"
+                  onClick={onOpenHisWorklist}
+                  title="ورود خودکار مشخصات بیماران از فایل اکسل (XLSX/XLS)، CSV یا کپی مستقیم از HIS"
+                  className="h-7 px-2.5 rounded-xl text-[11px] font-extrabold border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 transition-all duration-200 cursor-pointer select-none flex items-center gap-1.5 shadow-2xs active:scale-95"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span>لیست HIS (اکسل/CSV)</span>
+                  {hisPendingCount > 0 && (
+                    <span className="px-1.5 py-0.2 rounded-md bg-emerald-600 text-white text-[10px] font-black tabular-nums leading-4">
+                      {hisPendingCount}
+                    </span>
+                  )}
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={toggleAutoCompact}
